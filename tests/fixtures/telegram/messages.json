@@ -1,0 +1,305 @@
+{
+  "plain_url": {
+    "message_id": 10,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000010,
+    "text": "https://example.com/post/1",
+    "entities": [
+      {
+        "offset": 0,
+        "length": 26,
+        "type": "url"
+      }
+    ]
+  },
+  "multi": {
+    "message_id": 11,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000011,
+    "text": "Worth reading later https://blog.example.com/airflow?utm_source=x and https://youtu.be/dQw4w9WgXcQ?si=abc #de #ai",
+    "entities": [
+      {
+        "offset": 20,
+        "length": 45,
+        "type": "url"
+      },
+      {
+        "offset": 70,
+        "length": 35,
+        "type": "url"
+      },
+      {
+        "offset": 106,
+        "length": 3,
+        "type": "hashtag"
+      },
+      {
+        "offset": 110,
+        "length": 3,
+        "type": "hashtag"
+      }
+    ]
+  },
+  "text_link": {
+    "message_id": 12,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000012,
+    "text": "Great thread on lakehouses",
+    "entities": [
+      {
+        "offset": 6,
+        "length": 6,
+        "type": "text_link",
+        "url": "https://x.com/someone/status/1790000000000000001"
+      }
+    ]
+  },
+  "photo_caption": {
+    "message_id": 13,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000013,
+    "photo": [
+      {
+        "file_id": "AgACAgQAAxkBAAIB",
+        "file_unique_id": "AQADx",
+        "file_size": 1433,
+        "width": 90,
+        "height": 67
+      }
+    ],
+    "caption": "Slide from the talk https://talks.example.org/iceberg #de",
+    "caption_entities": [
+      {
+        "offset": 20,
+        "length": 33,
+        "type": "url"
+      },
+      {
+        "offset": 54,
+        "length": 3,
+        "type": "hashtag"
+      }
+    ]
+  },
+  "emoji": {
+    "message_id": 14,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000014,
+    "text": "🔥🔥 must read 👉 https://example.com/emoji-post ok #ai",
+    "entities": [
+      {
+        "offset": 18,
+        "length": 30,
+        "type": "url"
+      },
+      {
+        "offset": 52,
+        "length": 3,
+        "type": "hashtag"
+      }
+    ]
+  },
+  "forwarded_channel": {
+    "message_id": 15,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000015,
+    "text": "Dagster vs Airflow: we cut failures by 40% after moving. Full write-up soon.",
+    "forward_origin": {
+      "type": "channel",
+      "chat": {
+        "id": -1001234567890,
+        "title": "Data Eng Weekly",
+        "username": "deweekly",
+        "type": "channel"
+      },
+      "message_id": 881,
+      "date": 1789996400
+    }
+  },
+  "forwarded_legacy_user": {
+    "message_id": 16,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000016,
+    "text": "Serve and volley drills for doubles",
+    "forward_from": {
+      "id": 42,
+      "is_bot": false,
+      "first_name": "Ana",
+      "last_name": "Ruiz",
+      "username": "anar"
+    },
+    "forward_date": 1789992800
+  },
+  "plain_text": {
+    "message_id": 17,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000017,
+    "text": "remember to buy strings"
+  },
+  "start": {
+    "message_id": 18,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000018,
+    "text": "/start",
+    "entities": [
+      {
+        "offset": 0,
+        "length": 6,
+        "type": "bot_command"
+      }
+    ]
+  },
+  "sticker": {
+    "message_id": 19,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "Julian",
+      "username": "julian",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "Julian",
+      "username": "julian",
+      "type": "private"
+    },
+    "date": 1790000019,
+    "sticker": {
+      "file_id": "CAACAgIAAxkBAAIC",
+      "file_unique_id": "AgADx",
+      "type": "regular",
+      "width": 512
+    }
+  },
+  "foreign": {
+    "message_id": 5,
+    "from": {
+      "id": 999,
+      "is_bot": false,
+      "first_name": "Stranger"
+    },
+    "chat": {
+      "id": 999,
+      "first_name": "Stranger",
+      "type": "private"
+    },
+    "date": 1790000000,
+    "text": "https://evil.example.com/spam",
+    "entities": [
+      {
+        "offset": 0,
+        "length": 29,
+        "type": "url"
+      }
+    ]
+  }
+}
