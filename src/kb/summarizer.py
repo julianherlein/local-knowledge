@@ -27,10 +27,13 @@ Return JSON only, matching the schema. Rules, all mandatory:
   write a short descriptive title of at most 10 words).
 - tldr: 2-3 sentences (1 for thin sources). No preamble like "This article...".
 - key_points: 3-7 bullets (fewer for thin sources), each one self-contained.
-- claims: notable claims or numbers, each ending with its timestamp or section reference
-  when one exists, e.g. "Cut p99 latency from 800ms to 120ms [12:40]".
-- concepts: ideas/techniques worth their own wiki page, lowercase, kebab-case-able nouns
-  (e.g. "idempotency", "backfills"). entities: tools, people, companies, papers, with
+- claims: the quotable specifics (numbers, measurements, strong assertions), each ending
+  with its timestamp or section reference when one exists, e.g. "Cut p99 latency from
+  800ms to 120ms [12:40]". Do not restate key points word for word; if a key point
+  already carries the only number, keep the claim shorter and sharper, or omit it.
+- concepts: ideas/techniques worth their own wiki page, as lowercase noun phrases with
+  spaces, singular unless the term is inherently plural (e.g. "idempotency",
+  "connection pooling", "backfills"). entities: tools, people, companies, papers, with
   their proper capitalization (e.g. "Dagster", "Andrej Karpathy").
 - open_questions: what the source leaves unanswered or you would want to verify. May be empty.
 - If the text shows it was cut in the middle ("characters omitted"), summarize what you

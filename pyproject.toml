@@ -41,6 +41,7 @@ kb-llm = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "services/llm/tests"]
+pythonpath = ["."]
 markers = [
     "live: hits a real external service (network or claude CLI); skipped unless opted in",
 ]
