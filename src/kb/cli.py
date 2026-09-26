@@ -6,6 +6,8 @@ import json
 import shutil
 import sqlite3
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import Annotated
@@ -14,7 +16,8 @@ import typer
 
 from . import __version__
 from .config import ENV_TEMPLATE, Settings, load_settings, render_config_template
-from .obs import AlreadyRunning, setup_logging
+from .git_ops import GitError
+from .obs import AlreadyRunning, run_lock, setup_logging
 from .queue import Queue
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="Personal knowledge base engine.")
@@ -41,10 +44,21 @@ def main(
     _state.verbose = verbose
 
 
-def settings() -> Settings:
+def settings(*, log: bool = True) -> Settings:
     s = load_settings(_state.home)
-    setup_logging(s.log_dir, verbose=_state.verbose)
+    if log:
+        setup_logging(s.log_dir, verbose=_state.verbose)
     return s
+
+
+@contextmanager
+def locked(s: Settings) -> Iterator[None]:
+    """Serialize vault writers (run, tag, digest): they share files and the pending-commit state."""
+    try:
+        with run_lock(s.lock_path):
+            yield
+    except AlreadyRunning as e:
+        die(f"{e}; wait for it to finish")
 
 
 def open_queue(s: Settings) -> Queue:
@@ -146,7 +160,7 @@ def auth_x(
 # processing -------------------------------------------------------------------------
 @app.command()
 def run(
-    limit: Annotated[int | None, typer.Option(help="Process at most N items (default: all pending).")] = None,
+    limit: Annotated[int | None, typer.Option(min=1, help="Process at most N items (default: all pending).")] = None,
     no_capture: Annotated[bool, typer.Option("--no-capture", help="Skip polling Telegram and X.")] = False,
     no_commit: Annotated[bool, typer.Option("--no-commit", help="Write files but do not git commit.")] = False,
     dry_run: Annotated[
@@ -156,22 +170,39 @@ def run(
     """Capture from Telegram and X, process the queue, commit to the vault."""
     from .pipeline import run as run_pipeline
 
-    s = settings()
+    s = settings(log=not dry_run)
+    skip = None
     if dry_run:
         s = _dry_run_settings(s)
+        setup_logging(s.log_dir, verbose=_state.verbose)
         no_capture, no_commit = True, True
-        echo(f"dry run: DB copy and vault in {s.home}")
+        skip = _needs_x_api(s)
+        echo(f"dry run: DB copy and vault in {s.home} (LLM calls are real)")
     elif not s.vault_path.exists():
         die(f"vault {s.vault_path} does not exist; run `kb init` first")
     try:
-        rep = run_pipeline(s, limit=limit, capture=not no_capture, commit=not no_commit, progress=echo)
+        rep = run_pipeline(s, limit=limit, capture=not no_capture, commit=not no_commit, progress=echo, skip=skip)
     except AlreadyRunning as e:
-        die(str(e))
+        die(f"{e}; wait for it to finish")
+    except GitError as e:
+        die(f"vault git repo unusable, nothing was processed: {e}")
     echo(f"done: {rep.done}, failed: {rep.failed}, processed: {len(rep.outcomes)}")
     if rep.commit_message:
         echo(f"git: {rep.commit_message}")
     if dry_run:
         echo(f"inspect: {s.vault_path}")
+
+
+def _needs_x_api(s: Settings):
+    """X API items are skipped in dry runs: a token refresh rotates the refresh token, and
+    the rotated one would land in the throwaway DB copy, breaking the real auth."""
+
+    def skip(item) -> bool:
+        if item.source_type != "x":
+            return False
+        return not (item.origin == "backfill" and item.inline_text and not s.x.backfill_fetch_via_api)
+
+    return skip
 
 
 def _dry_run_settings(s: Settings) -> Settings:
@@ -212,8 +243,9 @@ def tag(item_id: int, domains: list[str]) -> None:
 
     s = settings()
     try:
-        changed = retag(s, open_queue(s), item_id, domains)
-    except OpError as e:
+        with locked(s):
+            changed = retag(s, open_queue(s), item_id, domains)
+    except (OpError, GitError) as e:
         die(str(e))
     echo(f"#{item_id} -> {', '.join(domains)}; updated {len(changed)} file(s)")
 
@@ -234,7 +266,11 @@ def digest(
 
     s = settings()
     d = date.fromisoformat(day) if day else None
-    paths = digest_mod.run(s, open_queue(s), day=d, week=week, commit=not no_commit)
+    try:
+        with locked(s):
+            paths = digest_mod.run(s, open_queue(s), day=d, week=week, commit=not no_commit)
+    except GitError as e:
+        die(str(e))
     if not paths:
         echo("nothing to digest")
     for p in paths:

@@ -81,3 +81,33 @@ def test_replace_front_matter_preserves_body_bytes():
 
 def test_split_without_front_matter():
     assert fm.split("# just a note\n") == ({}, "# just a note\n")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "1.",
+        "0b101",
+        "1.5_0",
+        "1.e+5",
+        "0o17",
+        ".5",
+        "a\x92b",
+        "a\x85b",
+        "x" + chr(0x2028) + "y",
+        "del\x7f",
+        "bom" + chr(0xFEFF),
+        "tab\tin",
+    ],
+)
+def test_yaml11_lookalikes_and_control_chars_round_trip(value):
+    """Critic M1: these used to load back as numbers or crash yaml.safe_load."""
+    out = fm.dump({"k": value})
+    assert yaml.safe_load(out.strip("-\n"))["k"] == value
+    assert "\x85" not in out and chr(0x2028) not in out and "\x92" not in out
+
+
+def test_lone_surrogate_is_replaced_not_crashing():
+    out = fm.dump({"k": "a\ud800b"})
+    assert yaml.safe_load(out.strip("-\n"))["k"] == "a�b"
+    out.encode("utf-8")

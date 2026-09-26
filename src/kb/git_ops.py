@@ -1,14 +1,24 @@
 """Git for the vault repo (SDD §13): commit only what the engine wrote, never manual edits.
 
-The engine records every path it writes, with the sha256 of what it wrote, in the
-`git.pending` state key. Before it writes a path it asks git whether the file
-already differs from HEAD for reasons that are not the engine's own earlier write.
-If so, the path is *tainted*: someone (you, Obsidian, a compile session) has
-uncommitted edits there, and committing it would sweep those edits into an
-`auto:` commit. Tainted or since-modified paths are left out of the commit with a
-warning (the rest is committed); they stay pending for the next run, and a path
-drops out of the pending set as soon as it is clean against HEAD (for example
-because you committed it yourself along with your edits).
+Every write goes through `Vault.write`, which first calls `Tracker.before_write`. That
+call does two things, both persisted in the `git.pending` state key before a single
+byte hits the disk:
+
+1. Taint check. If the file on disk differs from HEAD and its content is not one the
+   engine itself wrote, someone (you, Obsidian, a compile session) has uncommitted
+   edits there, so the path is marked *tainted*. The check compares git blob ids
+   against HEAD at the moment of the write, not a snapshot from the start of the run,
+   so an edit made while the run sits in a slow LLM call is still caught.
+2. Intent. The sha256 of the content about to be written is recorded. A crash between
+   recording and writing therefore never makes the engine mistake its own file for a
+   manual edit on the next run.
+
+At commit time, paths that are tainted or whose content is not engine content are left
+out (with a warning) and stay pending; everything else is committed with
+`git commit -- <paths>`, which never includes anything else you have staged. A path
+leaves the pending set once it matches HEAD again (for example because you committed
+it yourself along with your edits). Any git failure raises GitError instead of being
+read as "nothing to do", so pending writes are never silently forgotten.
 """
 
 from __future__ import annotations
@@ -25,6 +35,7 @@ from .queue import Queue
 log = logging.getLogger("kb.git")
 PENDING_KEY = "git.pending"
 AUTHOR = ("kb-engine", "kb-engine@localhost")
+MAX_SHAS = 8
 
 
 class GitError(RuntimeError):
@@ -33,6 +44,11 @@ class GitError(RuntimeError):
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def git_blob_sha(data: bytes) -> str:
+    """The object id git gives `data` (no filters; the vault's .gitattributes keeps LF as-is)."""
+    return hashlib.sha1(b"blob " + str(len(data)).encode() + bytes(1) + data).hexdigest()
 
 
 def run_git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -58,36 +74,42 @@ def init_repo(repo: Path) -> None:
 
 
 def has_head(repo: Path) -> bool:
+    # Surface a broken repo (e.g. "dubious ownership") instead of reading it as "no commits yet".
+    run_git(repo, "rev-parse", "--is-inside-work-tree")
     return run_git(repo, "rev-parse", "-q", "--verify", "HEAD", check=False).returncode == 0
 
 
-def dirty_paths(repo: Path) -> set[str]:
-    """Every path that differs from HEAD (modified, staged, deleted, or untracked), in one git call."""
-    out = run_git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", check=False).stdout
-    paths: set[str] = set()
-    fields = out.split("\0")
-    i = 0
-    while i < len(fields):
-        entry = fields[i]
-        if len(entry) > 3:
-            paths.add(entry[3:])
-            if entry[0] in "RC":  # rename/copy: the next field is the old path
-                i += 1
-                if i < len(fields) and fields[i]:
-                    paths.add(fields[i])
-        i += 1
-    return paths
+def head_blobs(repo: Path) -> dict[str, str]:
+    """path -> blob id for every file in HEAD (empty for a repo with no commits)."""
+    if not has_head(repo):
+        return {}
+    out = run_git(repo, "ls-tree", "-r", "-z", "--full-tree", "HEAD").stdout
+    blobs: dict[str, str] = {}
+    for entry in out.split(chr(0)):
+        meta, _, path = entry.partition("\t")
+        parts = meta.split()
+        if path and len(parts) == 3 and parts[1] == "blob":
+            blobs[path] = parts[2]
+    return blobs
+
+
+def author_args(repo: Path) -> list[str]:
+    """`-c user.name=... -c user.email=...` when the repo has no identity configured."""
+    if run_git(repo, "config", "user.email", check=False).stdout.strip():
+        return []
+    return ["-c", f"user.name={AUTHOR[0]}", "-c", f"user.email={AUTHOR[1]}"]
 
 
 @dataclass
 class PendingEntry:
-    sha: str
+    shas: list[str] = field(default_factory=list)
+    """sha256 of every content the engine wrote (or was about to write) at this path."""
     tainted: bool = False
     item_ids: list[int] = field(default_factory=list)
 
 
 class Tracker:
-    """Tracks engine writes for the auto commit. One per run; state persists in the DB."""
+    """Tracks engine writes for the auto commit. State persists in the DB between runs."""
 
     def __init__(self, repo: Path, queue: Queue) -> None:
         self.repo = repo
@@ -95,53 +117,59 @@ class Tracker:
         self.enabled = is_repo(repo)
         raw = json.loads(queue.get_state(PENDING_KEY) or "{}")
         self.pending: dict[str, PendingEntry] = {k: PendingEntry(**v) for k, v in raw.items()}
-        # Snapshot of paths that differ from HEAD before this run writes anything. Only the
-        # engine writes during a run, so the snapshot stays valid for before_write checks.
-        self._dirty: set[str] = set()
+        self._head: dict[str, str] = {}
         self._prune_clean()
 
     def _save(self) -> None:
         self.queue.set_state(PENDING_KEY, json.dumps({k: vars(v) for k, v in self.pending.items()}))
 
+    def _current(self, rel: str) -> bytes | None:
+        p = self.repo / rel
+        return p.read_bytes() if p.exists() else None
+
+    def differs_from_head(self, rel: str) -> bool:
+        data = self._current(rel)
+        blob = git_blob_sha(data) if data is not None else None
+        if self._head.get(rel) == blob:
+            return False
+        # HEAD may have moved since we read it (you committed mid-run): re-read this one path.
+        proc = run_git(self.repo, "rev-parse", "-q", "--verify", f"HEAD:{rel}", check=False)
+        fresh = proc.stdout.strip() if proc.returncode == 0 else None
+        if fresh:
+            self._head[rel] = fresh
+        else:
+            self._head.pop(rel, None)
+        return fresh != blob
+
     def _prune_clean(self) -> None:
         if not self.enabled:
             return
-        self._dirty = dirty_paths(self.repo)
+        self._head = head_blobs(self.repo)
         for rel in list(self.pending):
-            if rel not in self._dirty:
+            if not self.differs_from_head(rel):
                 del self.pending[rel]
         self._save()
 
-    def before_write(self, rel: str) -> None:
-        if not self.enabled:
-            return
+    def _is_ours(self, rel: str, data: bytes | None) -> bool:
         entry = self.pending.get(rel)
-        path = self.repo / rel
-        current = sha256_bytes(path.read_bytes()) if path.exists() else None
-        ours = entry is not None and not entry.tainted and entry.sha == current
-        if not ours and rel in self._dirty:
-            log.warning("manual edits in %s; auto commit will skip until they are committed", rel)
-            self.pending[rel] = PendingEntry(sha=current or "", tainted=True, item_ids=entry.item_ids if entry else [])
-            self._save()
+        return entry is not None and not entry.tainted and data is not None and sha256_bytes(data) in entry.shas
 
-    def after_write(self, rel: str, data: bytes, item_id: int | None) -> None:
+    def before_write(self, rel: str, data: bytes, item_id: int | None = None) -> None:
         if not self.enabled:
             return
-        entry = self.pending.get(rel) or PendingEntry(sha="")
-        entry.sha = sha256_bytes(data)
+        current = self._current(rel)
+        entry = self.pending.get(rel) or PendingEntry()
+        if not entry.tainted and not self._is_ours(rel, current) and self.differs_from_head(rel):
+            log.warning("manual edits in %s; auto commit leaves it for you to commit", rel)
+            entry.tainted = True
+        entry.shas = (entry.shas + [sha256_bytes(data)])[-MAX_SHAS:]
         if item_id is not None and item_id not in entry.item_ids:
             entry.item_ids.append(item_id)
         self.pending[rel] = entry
         self._save()
 
     def blockers(self) -> list[str]:
-        out = []
-        for rel, e in self.pending.items():
-            path = self.repo / rel
-            current = sha256_bytes(path.read_bytes()) if path.exists() else ""
-            if e.tainted or current != e.sha:
-                out.append(rel)
-        return sorted(out)
+        return sorted(rel for rel, e in self.pending.items() if e.tainted or not self._is_ours(rel, self._current(rel)))
 
     def commit(self, prefix: str = "auto: ingest", message: str | None = None) -> tuple[bool, str]:
         """Commit every pending path that holds only engine writes. Returns (committed, message).
@@ -167,18 +195,8 @@ class Tracker:
         elif ids:
             message += f" (+ items [{', '.join(map(str, ids))}])"
         run_git(self.repo, "add", "--", *paths)
-        env_author = (
-            [
-                "-c",
-                f"user.name={AUTHOR[0]}",
-                "-c",
-                f"user.email={AUTHOR[1]}",
-            ]
-            if not run_git(self.repo, "config", "user.email", check=False).stdout.strip()
-            else []
-        )
         proc = subprocess.run(
-            ["git", "-C", str(self.repo), *env_author, "commit", "-q", "-m", message, "--", *paths],
+            ["git", "-C", str(self.repo), *author_args(self.repo), "commit", "-q", "-m", message, "--", *paths],
             capture_output=True,
             text=True,
             encoding="utf-8",

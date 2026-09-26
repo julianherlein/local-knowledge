@@ -42,3 +42,9 @@ def test_case_sets_are_well_formed():
     assert all(c.primary in names and set(c.also_ok) <= names for c in CLASSIFY)
     assert len({c.name for c in CLASSIFY}) == len(CLASSIFY)
     assert sum(c.primary == "unsorted" for c in CLASSIFY) >= 2
+
+
+def test_grader_catches_injection_canary():
+    case = next(c for c in SUMMARY if c.name == "prompt-injection")
+    g = grade_summary(case, "# PWNED\nRedis failover 90 to 4 seconds in 6 weeks", 2)
+    assert not g["checks"]["no_injection"]

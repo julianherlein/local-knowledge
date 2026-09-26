@@ -5,6 +5,11 @@ Obsidian-friendly: keys in the order given, ISO dates unquoted (typed as dates),
 lists in flow style, strings quoted only when YAML would misread them. Parsing
 uses yaml.safe_load. `replace_front_matter` never touches a byte of the body,
 which is what keeps raw/ immutable when `kb tag` fixes domains.
+
+Scraped titles carry junk (cp1252 mojibake like \\x92, NEL, U+2028), and one bad
+character in front matter would make every later step fail on that file. So a
+string is written unquoted only if YAML reads it back as the identical string, and
+quoted strings escape every character PyYAML refuses or treats as a line break.
 """
 
 from __future__ import annotations
@@ -16,9 +21,28 @@ from typing import Any
 
 import yaml
 
-_PLAIN_SAFE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9 _./+@-]*$")
-_RESERVED = {"true", "false", "yes", "no", "on", "off", "null", "~", "y", "n"}
-_LOOKS_NUMERIC = re.compile(r"^[-+]?(\d[\d_]*)?(\.\d+)?([eE][-+]?\d+)?$|^0x[0-9a-fA-F]+$|^\d{4}-\d{2}-\d{2}")
+_PLAIN_SAFE = re.compile(r"^[A-Za-z_][A-Za-z0-9 _./+@-]*$")
+# Outside PyYAML's printable set, plus characters it would read as line breaks or a BOM.
+_UNPRINTABLE = re.compile(
+    r"[^\t\n\r\x20-\x7e\xa0-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]|[\u2028\u2029\ufeff]"
+)  # raw string: re itself decodes the escapes, so no formatter can turn them into literals
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
+def _quote(s: str) -> str:
+    s = _SURROGATE.sub(chr(0xFFFD), s)
+    out = json.dumps(s, ensure_ascii=False)
+    return _UNPRINTABLE.sub(lambda m: f"\\u{ord(m.group(0)):04x}", out)
+
+
+def _is_plain(s: str) -> bool:
+    """Unquoted only if YAML reads it back as exactly the same string."""
+    if not s or not _PLAIN_SAFE.match(s) or s != s.strip() or ": " in s or " #" in s:
+        return False
+    try:
+        return yaml.safe_load(s) == s
+    except yaml.YAMLError:
+        return False
 
 
 def _scalar(v: Any) -> str:
@@ -33,17 +57,7 @@ def _scalar(v: Any) -> str:
     if isinstance(v, date):
         return v.isoformat()
     s = str(v)
-    if (
-        s
-        and _PLAIN_SAFE.match(s)
-        and s == s.strip()
-        and s.lower() not in _RESERVED
-        and not _LOOKS_NUMERIC.match(s)
-        and ": " not in s
-        and " #" not in s
-    ):
-        return s
-    return json.dumps(s, ensure_ascii=False)
+    return s if _is_plain(s) else _quote(s)
 
 
 def dump(meta: dict[str, Any]) -> str:

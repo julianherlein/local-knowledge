@@ -356,7 +356,8 @@ class Queue:
 
     def recent_errors(self, limit: int = 10) -> list[Item]:
         rows = self.conn.execute(
-            "SELECT * FROM items WHERE status IN (?, ?) ORDER BY updated_at DESC, id DESC LIMIT ?",
+            # julianday() parses the UTC offset, so ordering survives DST and timezone changes.
+            "SELECT * FROM items WHERE status IN (?, ?) ORDER BY julianday(updated_at) DESC, id DESC LIMIT ?",
             (FAILED, FAILED_PERMANENT, limit),
         ).fetchall()
         return [Item.from_row(r) for r in rows]
@@ -366,9 +367,17 @@ class Queue:
 
     def llm_cost_since(self, iso: str) -> tuple[int, float]:
         row = self.conn.execute(
-            "SELECT COUNT(*) n, COALESCE(SUM(cost_usd), 0) c FROM llm_calls WHERE at >= ?", (iso,)
+            "SELECT COUNT(*) n, COALESCE(SUM(cost_usd), 0) c FROM llm_calls WHERE julianday(at) >= julianday(?)",
+            (iso,),
         ).fetchone()
         return row["n"], row["c"]
+
+    def taken_stems(self) -> set[str]:
+        """Every file stem already assigned to an item, written to disk or not."""
+        rows = self.conn.execute(
+            "SELECT raw_path, summary_path FROM items WHERE raw_path IS NOT NULL OR summary_path IS NOT NULL"
+        ).fetchall()
+        return {p.rsplit("/", 1)[-1].removesuffix(".md") for r in rows for p in (r["raw_path"], r["summary_path"]) if p}
 
     def known_x_ids(self, ids: list[str]) -> set[str]:
         if not ids:

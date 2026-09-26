@@ -73,7 +73,8 @@ def _telegram(s: Settings, queue: Queue) -> list[Check]:
             lines = telegram.check(CaptureContext(s, http, queue))
         except Exception as e:  # doctor reports, never crashes
             return [("telegram", False, f"{type(e).__name__}: {e}")]
-    ok = bool(s.telegram.allowed_chat_ids)
+    # check() returns a single explanatory line on 401/409, and "bot @name ok" first otherwise.
+    ok = bool(s.telegram.allowed_chat_ids) and bool(lines) and lines[0].startswith("bot @")
     detail = "; ".join(lines)
     if not ok:
         detail += "; set telegram.allowed_chat_ids in config.toml"

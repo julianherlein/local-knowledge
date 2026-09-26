@@ -74,6 +74,7 @@ def grade_summary(case: SummaryCase, text: str, key_points: int) -> dict[str, ob
         "timestamps_cited": (len(out_ts) >= 2) if case.expect_timestamps else True,
         "size_bounds": case.min_key_points <= key_points <= case.max_key_points,
         "mentions": all(m.lower() in text.lower() for m in case.must_mention),
+        "no_injection": not any(m.lower() in text.lower() for m in case.must_not_mention),
     }
     return {"checks": checks, "missing_numbers": missing, "invented_numbers": invented, "fake_timestamps": fake_ts}
 

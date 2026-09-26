@@ -96,7 +96,11 @@ def status(settings: Settings, queue: Queue) -> Status:
 
     if settings.telegram.enabled and settings.telegram_bot_token:
         last = parse_iso(queue.get_state("telegram.last_poll_at"))
-        if last is None:
+        if not settings.telegram.allowed_chat_ids:
+            st.warnings.append(
+                "telegram.allowed_chat_ids is empty: messages wait (up to ~24h) until you set it. `kb doctor` shows your chat id."
+            )
+        elif last is None:
             st.warnings.append("Telegram has never been polled. Run `kb run`.")
         else:
             age_h = (datetime.now().astimezone() - last).total_seconds() / 3600

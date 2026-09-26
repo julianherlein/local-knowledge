@@ -113,3 +113,14 @@ def test_compile_queue_append_is_idempotent_and_retaggable():
     re = writer.retag_compile_queue(t2, "2026-09-26-a", ["ai-llms"])
     assert "[[wiki/sources/2026-09-26-a]] #ai-llms — Line one." in re
     assert "[[wiki/sources/2026-09-26-a-2]] #tennis — other" in re
+
+
+def test_cjk_budget_counts_one_token_per_char():
+    from kb.textutil import est_tokens, head
+
+    cjk = "数据工程" * 5000  # 20k chars, ~20k tokens
+    assert est_tokens(cjk) == 20_000
+    assert est_tokens("abcd" * 100) == 100
+    out, cut = head_tail(cjk, 1000)
+    assert cut and est_tokens(out) <= 1000 + 30
+    assert len(head(cjk, 100)) <= 102

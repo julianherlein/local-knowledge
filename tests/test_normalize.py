@@ -69,3 +69,20 @@ def test_extract_urls_dedups_by_canonical_form():
 def test_extract_hashtags_ignores_url_fragments():
     assert extract_hashtags("#AI read this https://example.com/#frag #sd #ai") == ["ai", "sd"]
     assert extract_hashtags("C# is not a tag, issue#4 neither") == []
+
+
+def test_balanced_parentheses_are_kept():
+    """Critic M2: a trailing ')' that belongs to the URL must survive."""
+    url = "https://en.wikipedia.org/wiki/Mercury_(planet)"
+    assert normalize(url).canonical_url == url
+    assert extract_urls(f"see {url}.") == [url]
+    assert extract_urls("(see https://example.com/a)") == ["https://example.com/a"]
+    assert normalize("https://example.com/a_(b)).").canonical_url == "https://example.com/a_(b)"
+
+
+def test_non_default_port_is_a_different_server():
+    assert normalize("http://example.com:8080/doc").canonical_url == "http://example.com:8080/doc"
+    assert normalize("https://example.com:443/doc").canonical_url == "https://example.com/doc"
+    assert normalize("http://example.com:80/doc").canonical_url == "https://example.com/doc"
+    with pytest.raises(InvalidURL):
+        normalize("https://example.com:99999/doc")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import date
 from pathlib import Path
 
@@ -22,6 +24,26 @@ def make_slug(title: str, max_length: int = 60) -> str:
     return s or "untitled"
 
 
+def atomic_write(path: Path, data: bytes) -> None:
+    """Write via a temp file + os.replace, so a crash never leaves a truncated file.
+
+    Windows can briefly refuse the replace while an indexer or antivirus holds the
+    target open, so a PermissionError is retried a few times before giving up.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.kb-tmp")
+    tmp.write_bytes(data)
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 4:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.2 * (attempt + 1))
+
+
 class Vault:
     def __init__(self, root: Path, tracker: Tracker | None = None) -> None:
         self.root = Path(root)
@@ -37,18 +59,19 @@ class Vault:
         return self.path(rel).read_text(encoding="utf-8")
 
     def write(self, rel: str, text: str, item_id: int | None = None) -> None:
-        """Write with LF endings and UTF-8, tracked for the auto commit."""
-        data = text.encode("utf-8")
+        """Write UTF-8 with LF endings. The tracker records the intent before the bytes land."""
+        data = text.encode("utf-8", errors="replace")  # lone surrogates from bad decoding
         if self.tracker:
-            self.tracker.before_write(rel)
-        p = self.path(rel)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(data)
-        if self.tracker:
-            self.tracker.after_write(rel, data, item_id)
+            self.tracker.before_write(rel, data, item_id)
+        atomic_write(self.path(rel), data)
 
     def stem_for(self, source_type: str, day: date, title: str, taken: set[str] | None = None) -> str:
-        """`<YYYY-MM-DD>-<slug>`, unique across raw/<type>/ and wiki/sources/."""
+        """`<YYYY-MM-DD>-<slug>`, unique across raw/<type>/, wiki/sources/ and `taken`.
+
+        `taken` must hold every stem already assigned in the DB: a file that failed to
+        write still owns its name, or a later item could claim it and be overwritten
+        when the first one is retried.
+        """
         base = f"{day.isoformat()}-{make_slug(title)}"
         stem, n = base, 2
         taken = taken or set()

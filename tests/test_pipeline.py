@@ -180,3 +180,69 @@ def test_lock_prevents_overlapping_runs(settings, queue, fake_llm):
 
     with run_lock(settings.lock_path), pytest.raises(AlreadyRunning):
         run(settings, queue, fake_llm)
+
+
+def test_failed_write_keeps_its_stem_reserved(settings, queue, fake_llm, monkeypatch):
+    """Critic C1: A fails inside the raw write, B with the same title must not take A's name."""
+    monkeypatch.setattr(
+        pipeline,
+        "fetch",
+        lambda item, ctx: FetchedItem(source_type="web", url=item.canonical_url, title="Home", body=f"body {item.id}"),
+    )
+    a = queue.enqueue("https://example.com/a", "cli").item_id
+    real_write = pipeline.Vault.write
+    calls = {"n": 0}
+
+    def flaky(self, rel, text, item_id=None):
+        if rel.startswith("raw/") and item_id == a and calls["n"] == 0:
+            calls["n"] += 1
+            raise PermissionError("file locked by antivirus")
+        return real_write(self, rel, text, item_id)
+
+    monkeypatch.setattr(pipeline.Vault, "write", flaky)
+    run(settings, queue, fake_llm)
+    assert queue.get(a).status == FAILED
+    b = queue.enqueue("https://example.com/b", "cli").item_id
+    run(settings, queue, fake_llm)
+    pa, pb = queue.get(a).raw_path, queue.get(b).raw_path
+    assert queue.get(a).status == queue.get(b).status == "done"
+    assert pa != pb
+    assert f"body {b}" in (settings.vault_path / pb).read_text(encoding="utf-8")
+    assert f"body {a}" in (settings.vault_path / pa).read_text(encoding="utf-8")
+
+
+def test_manual_tag_before_tagging_step_sticks(settings, queue, fake_llm, patched_fetch):
+    """Critic M4: kb tag on a queued item must not be overwritten by the classifier."""
+    iid = queue.enqueue("https://example.com/m", "cli").item_id
+    retag(settings, queue, iid, ["tennis"])
+    run(settings, queue, fake_llm)
+    item = queue.get(iid)
+    assert item.domains == ["tennis"] and item.tag_method == "manual"
+    assert [
+        c.json_schema["properties"].get("confidence")
+        for c in fake_llm.calls
+        if "confidence" in c.json_schema["properties"]
+    ] == []
+
+
+def test_commit_failure_is_reported_not_raised(settings, queue, fake_llm, patched_fetch, vault_dir):
+    """Critic M5: a failing commit (hook, gpgsign) keeps the run's report and retries later."""
+    hook = vault_dir / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+    queue.enqueue("https://example.com/h", "cli")
+    rep = run(settings, queue, fake_llm)
+    assert rep.done == 1 and not rep.committed and rep.commit_message.startswith("commit failed")
+    row = queue.conn.execute("SELECT finished_at, notes FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+    assert row["finished_at"] and "commit failed" in row["notes"]
+    hook.unlink()
+    rep = run(settings, queue, fake_llm)
+    assert rep.committed
+
+
+def test_skip_filter(settings, queue, fake_llm, patched_fetch):
+    a = queue.enqueue("https://x.com/u/status/1", "x_bookmark").item_id
+    b = queue.enqueue("https://example.com/w", "cli").item_id
+    rep = run(settings, queue, fake_llm, skip=lambda i: i.source_type == "x")
+    assert [o.item_id for o in rep.outcomes] == [b]
+    assert queue.get(a).status == "queued"

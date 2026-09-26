@@ -24,7 +24,7 @@ from . import fm, summarizer, tagger, writer
 from .capture import CaptureContext, CaptureReport
 from .config import Settings
 from .fetchers import FetchContext, fetch
-from .git_ops import Tracker, sha256_bytes
+from .git_ops import GitError, Tracker, sha256_bytes
 from .models import FetchedItem, FetchError, TagResult
 from .obs import run_lock
 from .queue import FAILED, Item, Queue, parse_iso
@@ -104,6 +104,10 @@ class Pipeline:
 
     def step_tag(self, item: Item) -> None:
         fetched = self._payload(item)
+        if item.tag_method == "manual" and item.domains:
+            # `kb tag` ran before this step: the user's choice wins, no classifier call.
+            self.queue.advance(item.id, "tagged", language=item.language or fetched.language)
+            return
         result = tagger.tag(
             self.settings, self.llm, fetched, item.hint_tags, note=item.note, queue=self.queue, item_id=item.id
         )
@@ -129,7 +133,7 @@ class Pipeline:
         if not raw_rel:
             captured = parse_iso(item.captured_at)
             day = captured.date() if captured else date.today()
-            stem = self.vault.stem_for(fetched.source_type, day, fetched.title)
+            stem = self.vault.stem_for(fetched.source_type, day, fetched.title, taken=self.queue.taken_stems())
             raw_rel = writer.raw_rel(fetched.source_type, stem)
             # Persist the path before writing so a crash re-uses it instead of creating a -2 twin.
             self.queue.update(item.id, raw_path=raw_rel, summary_path=writer.summary_rel(stem))
@@ -208,7 +212,13 @@ def run(
     capture: bool = True,
     commit: bool = True,
     progress: Progress | None = None,
+    skip: Callable[[Item], bool] | None = None,
 ) -> RunReport:
+    """One `kb run`. Raises GitError before touching anything if the vault repo is unusable.
+
+    `skip` filters pending items out of this run (used by --dry-run to avoid calls
+    with side effects, such as X token rotation).
+    """
     say = progress or (lambda _msg: None)
     own_queue = queue is None
     own_http = http is None
@@ -217,13 +227,18 @@ def run(
     report = RunReport()
     try:
         with run_lock(settings.lock_path):
-            run_id = queue.start_run()
             # Writes are always tracked, so a --no-commit run's files are picked up by the next commit.
             tracker = Tracker(settings.vault_path, queue)
+            run_id = queue.start_run()
             vault = Vault(settings.vault_path, tracker)
             if capture:
                 report.captures = run_captures(CaptureContext(settings, http, queue), say)
-            items = queue.pending(limit or settings.run.max_items, settings.run.max_attempts)
+            items = queue.pending(limit if limit is not None else settings.run.max_items, settings.run.max_attempts)
+            if skip:
+                skipped = [i for i in items if skip(i)]
+                items = [i for i in items if not skip(i)]
+                if skipped:
+                    say(f"skipping {len(skipped)} item(s) this run: " + ", ".join(f"#{i.id}" for i in skipped))
             if items:
                 llm = llm or make_llm(settings)
                 pipe = Pipeline(settings, queue, llm, http, vault)
@@ -233,7 +248,12 @@ def run(
                     report.outcomes.append(outcome)
                     say(f"    -> {outcome.status}" + (f": {outcome.error}" if outcome.error else ""))
             if commit:
-                report.committed, report.commit_message = tracker.commit()
+                try:
+                    report.committed, report.commit_message = tracker.commit()
+                except GitError as e:
+                    # Files are written and still pending; the next run retries the commit.
+                    log.error("auto commit failed: %s", e)
+                    report.commit_message = f"commit failed (will retry next run): {e}"
             queue.finish_run(
                 run_id,
                 captured=sum(c.enqueued for c in report.captures),

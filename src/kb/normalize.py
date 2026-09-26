@@ -41,8 +41,26 @@ def _host(netloc: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+_TRAIL_PUNCT = ".,;:!?'\""
+_PAIRS = {")": "(", "]": "[", "}": "{"}
+
+
+def trim_trailing(url: str) -> str:
+    """Drop sentence punctuation after a URL, but keep a closing bracket the URL itself opened
+    (`wiki/Mercury_(planet)` stays intact, `(see https://x.com/a)` loses the `)`)."""
+    while url:
+        last = url[-1]
+        if last in _TRAIL_PUNCT:
+            url = url[:-1]
+        elif last in _PAIRS and url.count(_PAIRS[last]) < url.count(last):
+            url = url[:-1]
+        else:
+            break
+    return url
+
+
 def normalize(url: str) -> Normalized:
-    url = url.strip().strip("<>").rstrip(".,;:!?)]}'\"")
+    url = trim_trailing(url.strip().strip("<>"))
     if url.startswith(TELEGRAM_SCHEME):
         return Normalized(canonical_url=url, source_type="web")
     if "://" not in url:
@@ -80,10 +98,18 @@ def normalize(url: str) -> Normalized:
         # Channel, playlist or search pages: no transcript to fetch, treat as web.
         return Normalized(canonical_url=_clean_web("youtube.com", path, parts.query), source_type="web")
 
+    try:
+        port = parts.port
+    except ValueError as e:
+        raise InvalidURL(url) from e
+    scheme = parts.scheme.lower()
+    if port is not None and (scheme, port) not in (("http", 80), ("https", 443)):
+        # A non-default port is a different server: keep it, and the scheme that goes with it.
+        return Normalized(canonical_url=_clean_web(f"{host}:{port}", path, parts.query, scheme), source_type="web")
     return Normalized(canonical_url=_clean_web(host, path, parts.query), source_type="web")
 
 
-def _clean_web(host: str, path: str, query: str) -> str:
+def _clean_web(host: str, path: str, query: str, scheme: str = "https") -> str:
     kept = [
         (k, v)
         for k, v in parse_qsl(query, keep_blank_values=True)
@@ -92,7 +118,7 @@ def _clean_web(host: str, path: str, query: str) -> str:
     kept.sort()
     if len(path) > 1:
         path = path.rstrip("/") or "/"
-    return urlunsplit(("https", host, path, urlencode(kept), ""))
+    return urlunsplit((scheme, host, path, urlencode(kept), ""))
 
 
 def extract_urls(text: str) -> list[str]:
@@ -100,7 +126,7 @@ def extract_urls(text: str) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for m in URL_RE.finditer(text or ""):
-        raw = m.group(0).rstrip(".,;:!?)]}'\"")
+        raw = trim_trailing(m.group(0))
         try:
             key = normalize(raw).canonical_url
         except InvalidURL:
