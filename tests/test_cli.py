@@ -78,3 +78,18 @@ def test_run_requires_vault(tmp_path):
 def test_run_with_nothing_pending(home):
     r = kb(home, "run", "--no-capture")
     assert r.exit_code == 0 and "done: 0, failed: 0" in r.output
+
+
+def test_dry_run_skips_items_that_would_call_the_x_api(settings):
+    """X critic M3: only usable backfill records are processed offline in a dry run."""
+    from types import SimpleNamespace as NS
+
+    from kb.cli import _needs_x_api
+
+    skip = _needs_x_api(settings)
+    assert skip(NS(source_type="web", origin="cli", inline_text=None)) is False
+    assert skip(NS(source_type="x", origin="x_bookmark", inline_text=None)) is True
+    assert skip(NS(source_type="x", origin="backfill", inline_text='{"id": "1"}')) is False
+    assert skip(NS(source_type="x", origin="backfill", inline_text="not json")) is True
+    assert skip(NS(source_type="x", origin="backfill", inline_text="[1, 2]")) is True
+    assert skip(NS(source_type="x", origin="backfill", inline_text=None)) is True

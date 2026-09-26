@@ -200,7 +200,14 @@ def _needs_x_api(s: Settings):
     def skip(item) -> bool:
         if item.source_type != "x":
             return False
-        return not (item.origin == "backfill" and item.inline_text and not s.x.backfill_fetch_via_api)
+        if item.origin != "backfill" or s.x.backfill_fetch_via_api:
+            return True
+        # Offline only if the stored export record is actually usable; a corrupt one would
+        # fall back to the API (and a token refresh) inside the fetcher.
+        try:
+            return not isinstance(json.loads(item.inline_text or ""), dict)
+        except ValueError:
+            return True
 
     return skip
 

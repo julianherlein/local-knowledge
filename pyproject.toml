@@ -44,6 +44,7 @@ testpaths = ["tests", "services/llm/tests"]
 pythonpath = ["."]
 markers = [
     "live: hits a real external service (network or claude CLI); skipped unless opted in",
+    "slow: drives real git subprocesses (~1s each on Windows); excluded from the pre-commit gate",
 ]
 addopts = "-m 'not live' -p no:cacheprovider"
 

@@ -100,3 +100,17 @@ def http() -> httpx.Client:
     c = httpx.Client()
     yield c
     c.close()
+
+
+# Tests that drive real git (commit, ls-tree, rev-parse) cost ~1s each on Windows, where
+# every process spawn is slow. They form the `slow` lane: run before shipping, not on
+# every commit. The pre-commit hook runs `-m "not slow and not live"`.
+_SLOW_MODULES = {"test_git_ops", "test_pipeline", "test_cli"}
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        module = item.module.__name__.rsplit(".", 1)[-1]
+        name = item.name.lower()
+        if module in _SLOW_MODULES or (module in {"test_init", "test_digest"} and ("git" in name or "commit" in name)):
+            item.add_marker(pytest.mark.slow)
