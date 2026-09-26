@@ -247,6 +247,14 @@ def run(
                     outcome = pipe.process(item)
                     report.outcomes.append(outcome)
                     say(f"    -> {outcome.status}" + (f": {outcome.error}" if outcome.error else ""))
+            if report.outcomes:
+                # Keep today's digest current after a manual run; it rides in the same auto commit.
+                try:
+                    from . import digest
+
+                    digest.run(settings, queue, day=date.today(), commit=False)
+                except Exception:  # the digest is a convenience; never fail the ingest over it
+                    log.exception("refreshing today's digest failed")
             if commit:
                 try:
                     report.committed, report.commit_message = tracker.commit()

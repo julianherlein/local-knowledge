@@ -115,10 +115,15 @@ class Tracker:
         self.repo = repo
         self.queue = queue
         self.enabled = is_repo(repo)
-        raw = json.loads(queue.get_state(PENDING_KEY) or "{}")
-        self.pending: dict[str, PendingEntry] = {k: PendingEntry(**v) for k, v in raw.items()}
+        self.pending: dict[str, PendingEntry] = {}
         self._head: dict[str, str] = {}
         self._prune_clean()
+
+    def _load(self) -> None:
+        # The DB is the source of truth: another Tracker in the same process (e.g. the digest
+        # refresh inside `kb run`) may have recorded writes since we last looked.
+        raw = json.loads(self.queue.get_state(PENDING_KEY) or "{}")
+        self.pending = {k: PendingEntry(**v) for k, v in raw.items()}
 
     def _save(self) -> None:
         self.queue.set_state(PENDING_KEY, json.dumps({k: vars(v) for k, v in self.pending.items()}))
@@ -142,6 +147,7 @@ class Tracker:
         return fresh != blob
 
     def _prune_clean(self) -> None:
+        self._load()
         if not self.enabled:
             return
         self._head = head_blobs(self.repo)
@@ -157,6 +163,7 @@ class Tracker:
     def before_write(self, rel: str, data: bytes, item_id: int | None = None) -> None:
         if not self.enabled:
             return
+        self._load()
         current = self._current(rel)
         entry = self.pending.get(rel) or PendingEntry()
         if not entry.tainted and not self._is_ours(rel, current) and self.differs_from_head(rel):

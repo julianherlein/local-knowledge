@@ -219,7 +219,7 @@ def _dry_run_settings(s: Settings) -> Settings:
     if s.vault_path.exists():
         shutil.copytree(s.vault_path, vault, ignore=shutil.ignore_patterns(".git"))
     d = s.model_copy(update={"home": tmp, "vault_path": vault})
-    init_vault(d)
+    init_vault(d, commit=False)
     return d
 
 
@@ -265,11 +265,14 @@ def digest(
     from . import digest as digest_mod
 
     s = settings()
-    d = date.fromisoformat(day) if day else None
+    try:
+        d = date.fromisoformat(day) if day else None
+    except ValueError:
+        die(f"--date must be YYYY-MM-DD, got {day!r}")
     try:
         with locked(s):
             paths = digest_mod.run(s, open_queue(s), day=d, week=week, commit=not no_commit)
-    except GitError as e:
+    except (GitError, ValueError, FileNotFoundError) as e:
         die(str(e))
     if not paths:
         echo("nothing to digest")

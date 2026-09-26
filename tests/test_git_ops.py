@@ -156,3 +156,12 @@ def test_first_commit_on_unborn_head_and_path_with_spaces(settings, queue, tmp_p
     Vault(repo, t).write("raw/web/first file.md", "F\n", item_id=1)
     ok, _ = t.commit()
     assert ok and committed_files(repo) == {"raw/web/first file.md"} or "first" in git(repo, "log", "--stat")
+
+
+def test_two_trackers_in_one_process_share_pending(settings, queue, vault_dir):
+    """The digest refresh inside `kb run` uses its own Tracker; the run's commit must include it."""
+    run_t = Tracker(vault_dir, queue)
+    Vault(vault_dir, run_t).write("raw/web/r.md", "R\n", item_id=1)
+    Vault(vault_dir, Tracker(vault_dir, queue)).write("digests/daily/2026-09-26.md", "D\n")
+    ok, _ = run_t.commit()
+    assert ok and committed_files(vault_dir) == {"raw/web/r.md", "digests/daily/2026-09-26.md"}

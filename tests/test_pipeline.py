@@ -246,3 +246,13 @@ def test_skip_filter(settings, queue, fake_llm, patched_fetch):
     rep = run(settings, queue, fake_llm, skip=lambda i: i.source_type == "x")
     assert [o.item_id for o in rep.outcomes] == [b]
     assert queue.get(a).status == "queued"
+
+
+def test_run_refreshes_todays_digest_in_same_commit(settings, queue, fake_llm, patched_fetch, vault_dir):
+    from datetime import date as _date
+
+    queue.enqueue("https://example.com/d", "cli")
+    rep = run(settings, queue, fake_llm)
+    note = vault_dir / "digests" / "daily" / f"{_date.today().isoformat()}.md"
+    assert rep.committed and note.exists()
+    assert git(vault_dir, "status", "--porcelain") == ""

@@ -249,6 +249,8 @@ allowed_chat_ids = []            # your chat id; `kb doctor` prints it after you
 [x]
 enabled = true
 redirect_uri = "http://127.0.0.1:8765/callback"   # must match the callback in your X app settings
+use_keyring = true               # refresh token in the OS keyring; false = kb.sqlite state table
+backfill_fetch_via_api = false   # true re-fetches every backfilled post via the API ($0.005 each)
 
 # Domains: edit descriptions to steer the classifier. Hashtags are the manual override.
 {domains}
