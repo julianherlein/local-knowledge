@@ -1,0 +1,80 @@
+{
+  "data": {
+    "id": "2083523134878646272",
+    "text": "This is the best explanation of CDC I have read https://t.co/QuOtE11111",
+    "created_at": "2026-08-01T12:00:00.000Z",
+    "author_id": "2244994945",
+    "conversation_id": "2083523134878646272",
+    "lang": "en",
+    "edit_history_tweet_ids": [
+      "2083523134878646272"
+    ],
+    "referenced_tweets": [
+      {
+        "type": "quoted",
+        "id": "2082753060664246272"
+      }
+    ],
+    "attachments": {
+      "media_keys": [
+        "7_2222"
+      ]
+    },
+    "entities": {
+      "urls": [
+        {
+          "start": 48,
+          "end": 71,
+          "url": "https://t.co/QuOtE11111",
+          "expanded_url": "https://x.com/other/status/2082753060664246272",
+          "display_url": "x.com/other/status/…"
+        }
+      ]
+    }
+  },
+  "includes": {
+    "users": [
+      {
+        "id": "2244994945",
+        "username": "jdoe",
+        "name": "Jane Doe"
+      },
+      {
+        "id": "783214",
+        "username": "other",
+        "name": "Other Person"
+      }
+    ],
+    "media": [
+      {
+        "media_key": "7_2222",
+        "type": "video",
+        "preview_image_url": "https://pbs.twimg.com/ext_tw_video_thumb/2222/pu/img/v.jpg"
+      }
+    ],
+    "tweets": [
+      {
+        "id": "2082753060664246272",
+        "text": "Change data capture, explained:\nlog-based beats polling. Details https://t.co/CdCdCd0000",
+        "created_at": "2026-07-30T09:00:00.000Z",
+        "author_id": "783214",
+        "conversation_id": "2082753060664246272",
+        "lang": "en",
+        "edit_history_tweet_ids": [
+          "2082753060664246272"
+        ],
+        "entities": {
+          "urls": [
+            {
+              "start": 66,
+              "end": 89,
+              "url": "https://t.co/CdCdCd0000",
+              "expanded_url": "https://other.dev/cdc",
+              "display_url": "other.dev/cdc"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

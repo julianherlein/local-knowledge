@@ -1,0 +1,170 @@
+[
+  {
+    "id": "2010048995128246272",
+    "created_at": "2026-01-10 15:00:00 -03:00",
+    "full_text": "Worth reading twice. Our notes: https://t.co/NoTeS00001 https://t.co/QqQqQ00001",
+    "media": [],
+    "screen_name": "jdoe",
+    "name": "Jane Doe",
+    "user_id": "2244994945",
+    "in_reply_to": null,
+    "retweeted_status": null,
+    "quoted_status": "2009535612318646272",
+    "media_tags": [],
+    "favorite_count": 3,
+    "retweet_count": 0,
+    "bookmark_count": 1,
+    "quote_count": 0,
+    "reply_count": 0,
+    "views_count": null,
+    "favorited": false,
+    "retweeted": false,
+    "bookmarked": true,
+    "url": "https://twitter.com/jdoe/status/2010048995128246272",
+    "metadata": {
+      "__typename": "Tweet",
+      "rest_id": "2010048995128246272",
+      "core": {
+        "user_results": {
+          "result": {
+            "__typename": "User",
+            "rest_id": "2244994945",
+            "core": {
+              "screen_name": "jdoe",
+              "name": "Jane Doe"
+            },
+            "legacy": {}
+          }
+        }
+      },
+      "legacy": {
+        "id_str": "2010048995128246272",
+        "full_text": "Worth reading twice. Our notes: https://t.co/NoTeS00001 https://t.co/QqQqQ00001",
+        "created_at": "Sat Jan 10 18:00:00 +0000 2026",
+        "lang": "en",
+        "user_id_str": "2244994945",
+        "conversation_id_str": "2010048995128246272",
+        "quoted_status_id_str": "2009535612318646272",
+        "is_quote_status": true,
+        "quoted_status_permalink": {
+          "url": "https://t.co/QqQqQ00001",
+          "expanded": "https://twitter.com/llmresearcher/status/2009535612318646272",
+          "display": "x.com/llmresearcher/…"
+        },
+        "entities": {
+          "urls": [
+            {
+              "url": "https://t.co/NoTeS00001",
+              "expanded_url": "https://notes.example.org/evals",
+              "display_url": "notes.example.org/evals",
+              "indices": [
+                32,
+                55
+              ]
+            },
+            {
+              "url": "https://t.co/QqQqQ00001",
+              "expanded_url": "https://twitter.com/llmresearcher/status/2009535612318646272",
+              "display_url": "x.com/llmresearcher/…",
+              "indices": [
+                56,
+                79
+              ]
+            }
+          ]
+        }
+      },
+      "quoted_status_result": {
+        "result": {
+          "__typename": "TweetWithVisibilityResults",
+          "tweet": {
+            "rest_id": "2009535612318646272",
+            "core": {
+              "user_results": {
+                "result": {
+                  "__typename": "User",
+                  "rest_id": "42",
+                  "core": {
+                    "screen_name": "llmresearcher",
+                    "name": "LLM Researcher"
+                  },
+                  "legacy": {}
+                }
+              }
+            },
+            "legacy": {
+              "id_str": "2009535612318646272",
+              "full_text": "New paper: evals beat vibes. https://t.co/PaPeR00001",
+              "created_at": "Fri Jan 09 08:00:00 +0000 2026",
+              "lang": "en",
+              "user_id_str": "42",
+              "entities": {
+                "urls": [
+                  {
+                    "url": "https://t.co/PaPeR00001",
+                    "expanded_url": "https://arxiv.org/abs/2601.00001",
+                    "display_url": "arxiv.org/abs/2601.00001",
+                    "indices": [
+                      29,
+                      52
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "created_at": "2025-01-01 00:00:00 +00:00",
+    "full_text": "record without an id"
+  },
+  {
+    "id": "1896202582225846272",
+    "created_at": "2025-03-02 11:15:00 -03:00",
+    "full_text": "Serve drills that actually work &gt; 100 random serves. https://t.co/TeNNiS0001 https://t.co/MeDiA00001",
+    "media": [
+      {
+        "type": "photo",
+        "url": "https://t.co/MeDiA00001",
+        "thumbnail": "https://pbs.twimg.com/media/Gserve.jpg?name=thumb",
+        "original": "https://pbs.twimg.com/media/Gserve.jpg?name=orig",
+        "ext_alt_text": "Serve toss diagram"
+      }
+    ],
+    "screen_name": "coachsam",
+    "name": "Coach Sam",
+    "profile_image_url": "https://pbs.twimg.com/profile_images/1/sam_normal.jpg",
+    "user_id": "99887766",
+    "in_reply_to": null,
+    "retweeted_status": null,
+    "quoted_status": null,
+    "media_tags": [],
+    "favorite_count": 120,
+    "retweet_count": 14,
+    "bookmark_count": 88,
+    "quote_count": 2,
+    "reply_count": 5,
+    "views_count": 9001,
+    "favorited": false,
+    "retweeted": false,
+    "bookmarked": true,
+    "url": "https://twitter.com/coachsam/status/1896202582225846272"
+  },
+  "not an object",
+  {
+    "id": "1991412444165046272",
+    "created_at": "2025-11-20 04:45:00 -03:00",
+    "full_text": "Long post about system design interviews.\n\nPart one: requirements first.\n\nPart two: back-of-envelope numbers.\n\nPart three: pick boring tech.",
+    "media": [],
+    "screen_name": "sdguru",
+    "name": "SD Guru",
+    "user_id": "31415",
+    "in_reply_to": null,
+    "retweeted_status": null,
+    "quoted_status": null,
+    "url": "https://twitter.com/sdguru/status/1991412444165046272"
+  }
+]
