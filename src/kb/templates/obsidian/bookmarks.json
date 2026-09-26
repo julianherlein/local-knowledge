@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "type": "file",
+      "ctime": 1790380800000,
+      "path": "wiki/index.md",
+      "title": "Index"
+    },
+    {
+      "type": "file",
+      "ctime": 1790380800000,
+      "path": "wiki/_compile-queue.md",
+      "title": "Compile queue"
+    },
+    {
+      "type": "search",
+      "ctime": 1790380800000,
+      "query": "path:wiki/concepts OR path:wiki/entities",
+      "title": "Concepts only"
+    },
+    {
+      "type": "search",
+      "ctime": 1790380800000,
+      "query": "tag:#mine",
+      "title": "My notes"
+    }
+  ]
+}

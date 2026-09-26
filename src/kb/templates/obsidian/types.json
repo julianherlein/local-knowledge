@@ -1,0 +1,29 @@
+{
+  "types": {
+    "aliases": "aliases",
+    "tags": "tags",
+    "domains": "multitext",
+    "sources": "multitext",
+    "type": "text",
+    "status": "text",
+    "source_type": "text",
+    "entity_kind": "text",
+    "question": "text",
+    "source": "text",
+    "parent": "text",
+    "url": "text",
+    "week": "text",
+    "item_id": "number",
+    "items": "number",
+    "failed": "number",
+    "captured": "date",
+    "published": "date",
+    "compiled": "date",
+    "created": "date",
+    "updated": "date",
+    "as_of": "date",
+    "date": "date",
+    "start": "date",
+    "end": "date"
+  }
+}

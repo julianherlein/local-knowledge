@@ -1,0 +1,2 @@
+# The engine writes LF; keep it LF on every OS so Windows checkouts do not churn whole files.
+* text=auto eol=lf
