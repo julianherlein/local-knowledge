@@ -106,10 +106,10 @@ def test_summary_file_links_raw(queue):
 
 def test_compile_queue_append_is_idempotent_and_retaggable():
     t = writer.append_compile_queue(None, "2026-09-26-a", ["system-design", "data-engineering"], "Line one.\nLine two.")
-    assert t.endswith("- [ ] [[sources/2026-09-26-a]] #system-design #data-engineering — Line one. Line two.\n")
+    assert t.endswith("- [ ] [[wiki/sources/2026-09-26-a]] #system-design #data-engineering — Line one. Line two.\n")
     assert writer.append_compile_queue(t, "2026-09-26-a", ["x"], "again") is None
     t2 = writer.append_compile_queue(t, "2026-09-26-a-2", ["tennis"], "other")
     assert t2.count("- [ ]") == 2
     re = writer.retag_compile_queue(t2, "2026-09-26-a", ["ai-llms"])
-    assert "[[sources/2026-09-26-a]] #ai-llms — Line one." in re
-    assert "[[sources/2026-09-26-a-2]] #tennis — other" in re
+    assert "[[wiki/sources/2026-09-26-a]] #ai-llms — Line one." in re
+    assert "[[wiki/sources/2026-09-26-a-2]] #tennis — other" in re

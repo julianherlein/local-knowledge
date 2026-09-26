@@ -143,11 +143,12 @@ class Tracker:
                 out.append(rel)
         return sorted(out)
 
-    def commit(self, prefix: str = "auto: ingest") -> tuple[bool, str]:
+    def commit(self, prefix: str = "auto: ingest", message: str | None = None) -> tuple[bool, str]:
         """Commit every pending path that holds only engine writes. Returns (committed, message).
 
         Paths with manual edits stay pending and are named in the message; everything
         else is committed, so one hand-edited file never holds back the whole ingest.
+        `message` replaces the default `<prefix> N items [ids]` subject (e.g. for digests).
         """
         if not self.enabled:
             return False, "vault is not a git repo"
@@ -161,7 +162,10 @@ class Tracker:
         if not paths:
             return False, "skipped auto commit: manual edits in " + ", ".join(sorted(blocked))
         ids = sorted({i for p in paths for i in self.pending[p].item_ids})
-        message = f"{prefix} {len(ids)} items [{', '.join(map(str, ids))}]" if ids else "auto: update vault"
+        if message is None:
+            message = f"{prefix} {len(ids)} items [{', '.join(map(str, ids))}]" if ids else "auto: update vault"
+        elif ids:
+            message += f" (+ items [{', '.join(map(str, ids))}])"
         run_git(self.repo, "add", "--", *paths)
         env_author = (
             [

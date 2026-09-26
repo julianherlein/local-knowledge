@@ -60,7 +60,7 @@ def retag(settings: Settings, queue: Queue, item_id: int, domains: list[str], *,
     return changed
 
 
-_QUEUE_LINE = re.compile(r"^- \[ \] \[\[sources/[^\]]+\]\]((?: #[\w-]+)*)", re.MULTILINE)
+_QUEUE_LINE = re.compile(r"^- \[ \] \[\[(?:wiki/)?sources/[^\]]+\]\]((?: #[\w-]+)*)", re.MULTILINE)
 
 
 def compile_queue_counts(settings: Settings) -> Counter[str]:

@@ -108,13 +108,13 @@ def render_summary(
 
 def compile_queue_line(stem: str, domains: list[str], tldr: str) -> str:
     tags = " ".join(f"#{d}" for d in domains)
-    return f"- [ ] [[sources/{stem}]] {tags} — {one_line(tldr, 240)}"
+    return f"- [ ] [[{SOURCES_DIR}/{stem}]] {tags} — {one_line(tldr, 240)}"
 
 
 def append_compile_queue(existing: str | None, stem: str, domains: list[str], tldr: str) -> str | None:
     """New file content with the line appended, or None if this source is already queued."""
     text = existing if existing is not None else COMPILE_QUEUE_HEADER
-    if re.search(rf"\[\[sources/{re.escape(stem)}(\|[^\]]*)?\]\]", text):
+    if re.search(rf"\[\[{SOURCES_DIR}/{re.escape(stem)}(\|[^\]]*)?\]\]", text):
         return None
     if not text.endswith("\n"):
         text += "\n"
@@ -123,7 +123,7 @@ def append_compile_queue(existing: str | None, stem: str, domains: list[str], tl
 
 def retag_compile_queue(text: str, stem: str, domains: list[str]) -> str:
     """Rewrite the hashtags on this source's queue line (used by `kb tag`)."""
-    pat = re.compile(rf"^(- \[[ xX]\] \[\[sources/{re.escape(stem)}\]\])((?: #[\w-]+)*)( — .*)$", re.MULTILINE)
+    pat = re.compile(rf"^(- \[[ xX]\] \[\[{SOURCES_DIR}/{re.escape(stem)}\]\])((?: #[\w-]+)*)( — .*)$", re.MULTILINE)
     return pat.sub(lambda m: m.group(1) + "".join(f" #{d}" for d in domains) + m.group(3), text)
 
 

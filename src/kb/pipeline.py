@@ -145,7 +145,14 @@ class Pipeline:
         )
         summary_rel = item.summary_path or writer.summary_rel(item.raw_path.rsplit("/", 1)[-1].removesuffix(".md"))
         self.vault.write(summary_rel, writer.render_summary(item.raw_path, meta, item.id, summary, truncated), item.id)
-        self.queue.advance(item.id, "summarized", summary_path=summary_rel, tldr=" ".join(summary.tldr.split()))
+        # The item title becomes the English title (D5), so digests and status read in English.
+        self.queue.advance(
+            item.id,
+            "summarized",
+            summary_path=summary_rel,
+            tldr=" ".join(summary.tldr.split()),
+            title=" ".join(summary.title.split()) or item.title,
+        )
 
     def step_queue(self, item: Item) -> None:
         stem = (item.summary_path or "").rsplit("/", 1)[-1].removesuffix(".md")

@@ -53,7 +53,7 @@ def test_full_run_produces_raw_summary_queue_and_commit(settings, queue, fake_ll
 
     cq = (vault_dir / "wiki/_compile-queue.md").read_text(encoding="utf-8")
     stem = item.summary_path.rsplit("/", 1)[1][:-3]
-    assert f"- [ ] [[sources/{stem}]] #data-engineering — The team replaced" in cq
+    assert f"- [ ] [[wiki/sources/{stem}]] #data-engineering — The team replaced" in cq
 
     assert rep.committed and rep.commit_message == f"auto: ingest 1 items [{iid}]"
     assert git(vault_dir, "status", "--porcelain") == ""
