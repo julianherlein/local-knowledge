@@ -1,0 +1,37 @@
+{
+  "id": "aBcDeFgHiJk",
+  "title": "The one-handed backhand,  explained",
+  "channel": "Tennis Lab",
+  "uploader": "Tennis Lab Official",
+  "channel_id": "UC0000000000000000000000",
+  "upload_date": "20260814",
+  "duration": 754,
+  "language": "en",
+  "webpage_url": "https://www.youtube.com/watch?v=aBcDeFgHiJk",
+  "description": "In this video we break down the one-handed backhand: grip, preparation and contact point.\n\nGear I use: https://example.com/gear",
+  "chapters": [
+    {"start_time": 0.0, "end_time": 62.0, "title": "Intro"},
+    {"start_time": 62.0, "end_time": 420.5, "title": "Grip and  preparation"},
+    {"start_time": 420.5, "end_time": 754.0, "title": "Contact point"}
+  ],
+  "subtitles": {
+    "en": [
+      {"ext": "json3", "url": "https://www.youtube.com/api/timedtext?v=aBcDeFgHiJk&lang=en&fmt=json3", "name": "English"},
+      {"ext": "vtt", "url": "https://www.youtube.com/api/timedtext?v=aBcDeFgHiJk&lang=en&fmt=vtt", "name": "English"}
+    ],
+    "live_chat": [
+      {"ext": "json", "url": "https://www.youtube.com/live_chat_replay?v=aBcDeFgHiJk", "name": ""}
+    ]
+  },
+  "automatic_captions": {
+    "en-orig": [
+      {"ext": "vtt", "url": "https://www.youtube.com/api/timedtext?v=aBcDeFgHiJk&kind=asr&lang=en&fmt=vtt", "name": "English (Original)"}
+    ],
+    "en": [
+      {"ext": "vtt", "url": "https://www.youtube.com/api/timedtext?v=aBcDeFgHiJk&kind=asr&lang=en&fmt=vtt", "name": "English"}
+    ],
+    "es": [
+      {"ext": "vtt", "url": "https://www.youtube.com/api/timedtext?v=aBcDeFgHiJk&kind=asr&lang=en&tlang=es&fmt=vtt", "name": "Spanish"}
+    ]
+  }
+}
