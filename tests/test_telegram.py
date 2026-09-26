@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 
 import httpx
 import pytest
@@ -323,14 +324,14 @@ def test_crash_mid_batch_keeps_offset_of_last_handled_update(ctx, router, monkey
     def flaky(url, **kw):
         calls["n"] += 1
         if calls["n"] == 2:
-            raise RuntimeError("disk I/O error")
+            raise sqlite3.OperationalError("disk I/O error")
         return real(url, **kw)
 
     monkeypatch.setattr(ctx.queue, "enqueue", flaky)
     second = m("text_link")
     Bot(router, [upd(100, m("plain_url")), upd(101, second), upd(102, m("photo_caption"))])
     rep = tg.poll(ctx)
-    assert rep.errors == ["RuntimeError: disk I/O error"]
+    assert rep.errors == ["OperationalError: disk I/O error"]
     assert offset(ctx) == "101"  # update 100 done; 101 will be re-delivered next run
     assert rep.enqueued == 1
     assert ctx.queue.get_state(tg.LAST_POLL_KEY) is None
@@ -427,3 +428,51 @@ def test_command_parsing():
     assert tg.command({"text": "/Help@julian_kb_bot extra"}) == "help"
     assert tg.command({"text": "https://example.com"}) is None
     assert tg.command({"caption": "/start"}) is None
+
+
+def _text_msg(mid: int, text: str, entities: list | None = None) -> dict:
+    msg = {"message_id": mid, "date": 1790000000, "chat": {"id": ME_ID, "type": "private"}, "text": text}
+    if entities is not None:
+        msg["entities"] = entities
+    return msg
+
+
+def test_unparseable_url_skips_that_message_not_the_queue(ctx, router):
+    """Critic H1: a URL urlsplit rejects must not stall every later message."""
+    bad = _text_msg(1, "look https://[fe80::1 broken")
+    good = _text_msg(2, "https://example.com/good")
+    bot = Bot(router, [upd(100, bad), upd(101, good)])
+    rep = tg.poll(ctx)
+    assert offset(ctx) == "102"
+    assert [i.canonical_url for i in ctx.queue.all_items()] == ["https://example.com/good"]
+    assert rep.enqueued == 1
+    texts = [b["text"] for b in bot.sent]
+    assert texts[-1].startswith("✓ queued")
+
+
+def test_parse_error_in_one_message_is_skipped_with_a_reply(ctx, router, monkeypatch):
+    real = tg.parse_message
+
+    def boom(msg):
+        if msg["message_id"] == 1:
+            raise KeyError("weird payload")
+        return real(msg)
+
+    monkeypatch.setattr(tg, "parse_message", boom)
+    bot = Bot(router, [upd(100, _text_msg(1, "x")), upd(101, _text_msg(2, "https://example.com/ok"))])
+    rep = tg.poll(ctx)
+    assert offset(ctx) == "102" and rep.enqueued == 1
+    assert any("skipped update 100" in e for e in rep.errors)
+    assert bot.sent[0]["text"] == tg.UNREADABLE
+
+
+def test_fragment_in_schemeless_url_entity_is_not_a_hashtag(ctx):
+    msg = _text_msg(1, "example.com/#ai", [{"type": "url", "offset": 0, "length": 15}])
+    assert tg.parse_message(msg).hashtags == []
+
+
+def test_start_with_url_still_captures(ctx, router):
+    msg = _text_msg(1, "/start https://example.com/s", [{"type": "bot_command", "offset": 0, "length": 6}])
+    bot = Bot(router, [upd(100, msg)])
+    rep = tg.poll(ctx)
+    assert rep.enqueued == 1 and bot.sent[0]["text"] != tg.USAGE

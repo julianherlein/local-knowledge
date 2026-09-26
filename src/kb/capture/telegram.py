@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -51,6 +52,7 @@ USAGE = (
     "Any other text is kept as a note. Results arrive in the daily digest."
 )
 NO_URL = "✗ no URL found"
+UNREADABLE = "✗ could not read this message; it was skipped"
 
 _HASHTAG_RE = re.compile(r"(?<![\w#])#[A-Za-z][\w-]*")
 _WS = re.compile(r"\s+")
@@ -189,7 +191,12 @@ def parse_message(msg: dict[str, Any]) -> Parsed:
         if kind in ("url", "hashtag"):
             cut.append((_py_index(text, off), _py_index(text, off + ln)))
     candidates.extend(extract_urls(text))
-    tags.extend(extract_hashtags(text))
+    # Regex fallback for hashtags only outside entity spans, so "example.com/#ai" (a url
+    # entity without a scheme) cannot become a domain override.
+    outside = text
+    for start, end in sorted(cut, reverse=True):
+        outside = outside[:start] + " " + outside[end:]
+    tags.extend(extract_hashtags(outside))
 
     urls: list[str] = []
     seen: set[str] = set()
@@ -344,31 +351,54 @@ def _drain(ctx: CaptureContext, allowed: set[int], report: CaptureReport) -> Non
             uid = u["update_id"]
             if offset is not None and uid < offset:
                 continue  # already handled; defensive against a server replay
-            _handle(ctx, u, allowed, report)
+            try:
+                reply = _handle(ctx, u, allowed, report)
+            except (sqlite3.Error, OSError):
+                raise  # our side is broken: stop here, the update is retried next run
+            except Exception as e:
+                # Something in this one message is unparseable. Skipping it (with a reply)
+                # beats stalling every later message until Telegram drops them at 24h.
+                msg = _scrub(f"{type(e).__name__}: {e}", ctx.settings.telegram_bot_token or "")
+                log.error("telegram: skipping unreadable update %s: %s", uid, msg)
+                report.errors.append(f"skipped update {uid}: {msg}")
+                m = u.get("message")
+                reply = (m, UNREADABLE) if isinstance(m, dict) and m.get("chat") else None
             offset = uid + 1
             ctx.queue.set_state(OFFSET_KEY, str(offset))  # after enqueue, never before
             progressed = True
+            if reply:
+                _safe_reply(ctx, *reply)  # after the offset: a crash never re-sends a reply
         if not progressed:
             return
     log.info("telegram: stopped after %d batches, the next run continues", MAX_BATCHES)
 
 
-def _handle(ctx: CaptureContext, update: dict[str, Any], allowed: set[int], report: CaptureReport) -> None:
+def _safe_reply(ctx: CaptureContext, msg: dict[str, Any], text: str) -> None:
+    try:
+        _reply(ctx, msg, text)
+    except Exception as e:  # replies are best effort, whatever goes wrong
+        log.warning(
+            "telegram: reply failed: %s", _scrub(f"{type(e).__name__}: {e}", ctx.settings.telegram_bot_token or "")
+        )
+
+
+def _handle(
+    ctx: CaptureContext, update: dict[str, Any], allowed: set[int], report: CaptureReport
+) -> tuple[dict[str, Any], str] | None:
+    """Enqueue what one update carries. Returns the (message, reply text) to send, if any."""
     msg = update.get("message")
     if not isinstance(msg, dict) or not isinstance(msg.get("chat"), dict):
-        return
+        return None
     chat_id = msg["chat"].get("id")
     if chat_id not in allowed:
         log.info("telegram: ignoring update %s from chat %s (not in allowed_chat_ids)", update["update_id"], chat_id)
-        return
+        return None
     report.seen += 1
 
-    cmd = command(msg)
-    if cmd in ("start", "help"):
-        _reply(ctx, msg, USAGE)
-        return
-
     parsed = parse_message(msg)
+    if command(msg) in ("start", "help") and not parsed.urls:
+        return msg, USAGE
+
     queued = dups = 0
     if parsed.urls:
         for url in parsed.urls:
@@ -392,8 +422,8 @@ def _handle(ctx: CaptureContext, update: dict[str, Any], allowed: set[int], repo
     report.duplicates += dups
     log.info("telegram: update %s -> %d queued, %d duplicate", update["update_id"], queued, dups)
     if not parsed.text and msg.get("media_group_id") and not (queued or dups):
-        return  # the other photos of an album: only the captioned one gets a reply
-    _reply(ctx, msg, reply_text(queued, dups))
+        return None  # the other photos of an album: only the captioned one gets a reply
+    return msg, reply_text(queued, dups)
 
 
 def check(ctx: CaptureContext) -> list[str]:
@@ -407,6 +437,8 @@ def check(ctx: CaptureContext) -> list[str]:
         updates = _get_updates(ctx, _stored_offset(ctx))
     except TelegramError as e:
         return [explain(e)]
+    except (httpx.InvalidURL, ValueError):
+        return ["TELEGRAM_BOT_TOKEN looks malformed (stray whitespace or quotes in ~/.kb/.env?)"]
     seen = _seen_chats(ctx, updates)
     if not seen:
         lines.append("no chats seen yet: send your bot a message, then run `kb doctor` again")

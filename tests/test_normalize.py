@@ -86,3 +86,11 @@ def test_non_default_port_is_a_different_server():
     assert normalize("http://example.com:80/doc").canonical_url == "https://example.com/doc"
     with pytest.raises(InvalidURL):
         normalize("https://example.com:99999/doc")
+
+
+@pytest.mark.parametrize("bad", ["https://[fe80::1", "https://ex℁ample.com/x", "https://a＃b.com"])
+def test_urlsplit_value_errors_become_invalid_url(bad):
+    """Telegram critic H1: urlsplit raises plain ValueError for these."""
+    with pytest.raises(InvalidURL):
+        normalize(bad)
+    assert extract_urls(f"see {bad} ok") == [] or all(u != bad for u in extract_urls(f"see {bad} ok"))

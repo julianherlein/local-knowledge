@@ -93,6 +93,31 @@ def head_blobs(repo: Path) -> dict[str, str]:
     return blobs
 
 
+def read_head_commit(repo: Path) -> str | None:
+    """HEAD's commit id read straight from .git files (no subprocess), or None if unsure.
+
+    None makes callers fall back to asking git, so odd layouts (worktree `.git` files,
+    detached states we do not parse) cost speed, never correctness.
+    """
+    git_dir = repo / ".git"
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref: "):
+            return head or None
+        ref = head[5:]
+        loose = git_dir / ref
+        if loose.exists():
+            return loose.read_text(encoding="utf-8").strip() or None
+        packed = git_dir / "packed-refs"
+        if packed.exists():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if line.endswith(" " + ref):
+                    return line.split(" ", 1)[0]
+        return "unborn"  # branch has no commits yet
+    except OSError:
+        return None
+
+
 def author_args(repo: Path) -> list[str]:
     """`-c user.name=... -c user.email=...` when the repo has no identity configured."""
     if run_git(repo, "config", "user.email", check=False).stdout.strip():
@@ -117,6 +142,7 @@ class Tracker:
         self.enabled = is_repo(repo)
         self.pending: dict[str, PendingEntry] = {}
         self._head: dict[str, str] = {}
+        self._head_ref: str | None = None
         self._prune_clean()
 
     def _load(self) -> None:
@@ -132,11 +158,17 @@ class Tracker:
         p = self.repo / rel
         return p.read_bytes() if p.exists() else None
 
+    def _head_moved(self) -> bool:
+        current = read_head_commit(self.repo)
+        return current is None or current != self._head_ref
+
     def differs_from_head(self, rel: str) -> bool:
         data = self._current(rel)
         blob = git_blob_sha(data) if data is not None else None
         if self._head.get(rel) == blob:
             return False
+        if rel not in self._head and data is not None and not self._head_moved():
+            return True  # new file, HEAD unchanged since we read it: no need to ask git per path
         # HEAD may have moved since we read it (you committed mid-run): re-read this one path.
         proc = run_git(self.repo, "rev-parse", "-q", "--verify", f"HEAD:{rel}", check=False)
         fresh = proc.stdout.strip() if proc.returncode == 0 else None
@@ -150,6 +182,7 @@ class Tracker:
         self._load()
         if not self.enabled:
             return
+        self._head_ref = read_head_commit(self.repo)
         self._head = head_blobs(self.repo)
         for rel in list(self.pending):
             if not self.differs_from_head(rel):

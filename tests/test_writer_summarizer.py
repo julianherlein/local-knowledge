@@ -124,3 +124,16 @@ def test_cjk_budget_counts_one_token_per_char():
     out, cut = head_tail(cjk, 1000)
     assert cut and est_tokens(out) <= 1000 + 30
     assert len(head(cjk, 100)) <= 102
+
+
+def test_neutralize_hashtags():
+    from kb.writer import neutralize_hashtags as n
+
+    esc = chr(92) + "#"  # a literal backslash-hash
+    assert n("Loved it #tennis #RickAstleyNever!") == f"Loved it {esc}tennis {esc}RickAstleyNever!"
+    assert n("# Heading\n## Sub") == "# Heading\n## Sub"
+    unchanged = "https://example.com/#frag and a&#39;b and C# and #1"
+    assert n(unchanged) == unchanged
+    assert n(f"already {esc}escaped") == f"already {esc}escaped"
+    assert n("`#code` and\n```\n#inside fence\n```\n#after") == f"`#code` and\n```\n#inside fence\n```\n{esc}after"
+    assert n("[#link](x)") == "[#link](x)"

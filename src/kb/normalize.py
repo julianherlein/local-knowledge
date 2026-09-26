@@ -65,10 +65,15 @@ def normalize(url: str) -> Normalized:
         return Normalized(canonical_url=url, source_type="web")
     if "://" not in url:
         url = "https://" + url
-    parts = urlsplit(url)
+    try:
+        # urlsplit raises plain ValueError for e.g. "https://[fe80::1" or NFKC-unsafe hosts;
+        # callers only expect InvalidURL, and one bad message must never stall capture.
+        parts = urlsplit(url)
+        host = _host(parts.netloc)
+    except ValueError as e:
+        raise InvalidURL(url) from e
     if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
         raise InvalidURL(url)
-    host = _host(parts.netloc)
     if not host or "." not in host:
         raise InvalidURL(url)
     path = parts.path or "/"

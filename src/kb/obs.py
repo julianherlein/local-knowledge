@@ -40,7 +40,7 @@ def setup_logging(log_dir: Path, *, verbose: bool = False) -> None:
     fh.setFormatter(JsonFormatter())
     root.addHandler(fh)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG if verbose else logging.WARNING)
+    ch.setLevel(logging.DEBUG if verbose else logging.ERROR)  # the CLI prints its own progress
     ch.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
     root.addHandler(ch)
     root.setLevel(logging.DEBUG if verbose else logging.INFO)

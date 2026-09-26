@@ -63,8 +63,28 @@ def raw_meta(item: Item, fetched: FetchedItem, tagged: TagResult) -> dict[str, A
     return {k: v for k, v in meta.items() if v is not None}
 
 
+# A `#word` in body text is a real tag to Obsidian: a tweet saying "#tennis" would put the raw
+# file under the tennis tag and graph color. Escaped as `\#word`, which renders as plain "#word".
+# Not after a word char, '&' (HTML entity), '/' or '=' (URLs), '\' (already escaped), '#', '[' or '('.
+_INLINE_TAG = re.compile(r"(?<![\w&/=\\#\[(])#(?=[^\W\d_])")
+_FENCED = re.compile(r"(^(?:```|~~~)[^\n]*\n.*?^(?:```|~~~)[ \t]*$)", re.MULTILINE | re.DOTALL)
+_INLINE_CODE = re.compile(r"(`[^`\n]*`)")
+
+
+def neutralize_hashtags(body: str) -> str:
+    """Escape inline hashtags outside fenced and inline code. Headings (`# x`) are untouched."""
+    out = []
+    for i, block in enumerate(_FENCED.split(body)):
+        if i % 2:  # fenced code block, kept verbatim
+            out.append(block)
+            continue
+        parts = _INLINE_CODE.split(block)
+        out.append("".join(p if j % 2 else _INLINE_TAG.sub(r"\\#", p) for j, p in enumerate(parts)))
+    return "".join(out)
+
+
 def render_raw(item: Item, fetched: FetchedItem, tagged: TagResult) -> str:
-    return fm.render(raw_meta(item, fetched, tagged), fetched.body)
+    return fm.render(raw_meta(item, fetched, tagged), neutralize_hashtags(fetched.body))
 
 
 def summary_meta(raw_rel_path: str, meta: dict[str, Any], item_id: int, truncated: bool) -> dict[str, Any]:
