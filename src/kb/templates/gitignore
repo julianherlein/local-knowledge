@@ -1,0 +1,10 @@
+# Obsidian: per-device UI state and caches (SDD 11.2). The rest of .obsidian/ is committed.
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.trash/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
