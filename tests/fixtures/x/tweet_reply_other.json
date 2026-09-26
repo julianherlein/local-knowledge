@@ -1,0 +1,29 @@
+{
+  "data": {
+    "id": "2103409169003446272",
+    "text": "@other agreed, this matches what we saw",
+    "created_at": "2026-09-25T09:00:00.000Z",
+    "author_id": "2244994945",
+    "conversation_id": "2082753060664246272",
+    "lang": "en",
+    "edit_history_tweet_ids": [
+      "2103409169003446272"
+    ],
+    "in_reply_to_user_id": "783214",
+    "referenced_tweets": [
+      {
+        "type": "replied_to",
+        "id": "2082753060664246272"
+      }
+    ]
+  },
+  "includes": {
+    "users": [
+      {
+        "id": "2244994945",
+        "username": "jdoe",
+        "name": "Jane Doe"
+      }
+    ]
+  }
+}

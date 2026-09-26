@@ -1,0 +1,54 @@
+{
+  "data": [
+    {
+      "id": "2103062635606966272",
+      "text": "@commenter good question, see below",
+      "created_at": "2026-09-24T10:03:00.000Z",
+      "author_id": "2244994945",
+      "conversation_id": "2103061880632246272",
+      "lang": "en",
+      "edit_history_tweet_ids": [
+        "2103062635606966272"
+      ],
+      "in_reply_to_user_id": "555000111",
+      "referenced_tweets": [
+        {
+          "type": "replied_to",
+          "id": "2103062383948726272"
+        }
+      ]
+    },
+    {
+      "id": "2103062132290486272",
+      "text": "1/ First, we stopped running full refreshes.",
+      "created_at": "2026-09-24T10:01:00.000Z",
+      "author_id": "2244994945",
+      "conversation_id": "2103061880632246272",
+      "lang": "en",
+      "edit_history_tweet_ids": [
+        "2103062132290486272"
+      ],
+      "in_reply_to_user_id": "2244994945",
+      "referenced_tweets": [
+        {
+          "type": "replied_to",
+          "id": "2103061880632246272"
+        }
+      ]
+    }
+  ],
+  "includes": {
+    "users": [
+      {
+        "id": "2244994945",
+        "username": "jdoe",
+        "name": "Jane Doe"
+      }
+    ]
+  },
+  "meta": {
+    "newest_id": "2103062635606966272",
+    "oldest_id": "2103062132290486272",
+    "result_count": 2
+  }
+}

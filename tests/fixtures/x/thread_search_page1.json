@@ -1,0 +1,84 @@
+{
+  "data": [
+    {
+      "id": "2103063642239926272",
+      "text": "4/ Finally, we turned off the dev warehouse at night.",
+      "created_at": "2026-09-24T10:07:00.000Z",
+      "author_id": "2244994945",
+      "conversation_id": "2103061880632246272",
+      "lang": "en",
+      "edit_history_tweet_ids": [
+        "2103063642239926272"
+      ],
+      "in_reply_to_user_id": "2244994945",
+      "referenced_tweets": [
+        {
+          "type": "replied_to",
+          "id": "2103063390581686272"
+        }
+      ]
+    },
+    {
+      "id": "2103063138923446272",
+      "text": "2/ Second, incremental models everywhere: https://t.co/InCrEm0001",
+      "created_at": "2026-09-24T10:05:00.000Z",
+      "author_id": "2244994945",
+      "conversation_id": "2103061880632246272",
+      "lang": "en",
+      "edit_history_tweet_ids": [
+        "2103063138923446272"
+      ],
+      "in_reply_to_user_id": "2244994945",
+      "referenced_tweets": [
+        {
+          "type": "replied_to",
+          "id": "2103062132290486272"
+        }
+      ],
+      "entities": {
+        "urls": [
+          {
+            "start": 42,
+            "end": 65,
+            "url": "https://t.co/InCrEm0001",
+            "expanded_url": "https://docs.getdbt.com/docs/build/incremental-models",
+            "display_url": "docs.getdbt.com/docs/build/inc…"
+          }
+        ]
+      }
+    },
+    {
+      "id": "2103062887265206272",
+      "text": "and one more detail for you",
+      "created_at": "2026-09-24T10:04:00.000Z",
+      "author_id": "2244994945",
+      "conversation_id": "2103061880632246272",
+      "lang": "en",
+      "edit_history_tweet_ids": [
+        "2103062887265206272"
+      ],
+      "in_reply_to_user_id": "2244994945",
+      "referenced_tweets": [
+        {
+          "type": "replied_to",
+          "id": "2103062635606966272"
+        }
+      ]
+    }
+  ],
+  "includes": {
+    "users": [
+      {
+        "id": "2244994945",
+        "username": "jdoe",
+        "name": "Jane Doe"
+      }
+    ]
+  },
+  "meta": {
+    "newest_id": "2103063642239926272",
+    "oldest_id": "2103062887265206272",
+    "result_count": 3,
+    "next_token": "b26v89c19zqg8o3fpds"
+  }
+}
