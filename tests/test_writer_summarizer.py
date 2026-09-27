@@ -1,5 +1,6 @@
 from datetime import date
 
+import pytest
 from kb_llm import FakeLLMClient
 
 from kb import fm, writer
@@ -136,4 +137,35 @@ def test_neutralize_hashtags():
     assert n(unchanged) == unchanged
     assert n(f"already {esc}escaped") == f"already {esc}escaped"
     assert n("`#code` and\n```\n#inside fence\n```\n#after") == f"`#code` and\n```\n#inside fence\n```\n{esc}after"
-    assert n("[#link](x)") == "[#link](x)"
+    assert n("see [the intro](#intro)") == "see [the intro](#intro)"  # link to a heading
+
+
+@pytest.mark.parametrize(
+    "src, expected",
+    [
+        # Obsidian's rule: at least one non-digit (re-judge MEDIUM 3)
+        ("#100DaysOfCode #1password #_private #1984", "{e}100DaysOfCode {e}1password {e}_private #1984"),
+        ("(#paren)", "({e}paren)"),
+        # never touch code or HTML
+        ("- item\n  ```c\n  #include <x>\n  ```\n#after", "- item\n  ```c\n  #include <x>\n  ```\n{e}after"),
+        ("text\n\n    #define X 1\n", "text\n\n    #define X 1\n"),
+        ("````\n```\n#inside\n```\n````\n#out", "````\n```\n#inside\n```\n````\n{e}out"),
+        ("```\n#never closed\n#still code", "```\n#never closed\n#still code"),
+        ('<a href="#top">up</a> #tag', '<a href="#top">up</a> {e}tag'),
+        ("``#double`` code", "``#double`` code"),
+    ],
+)
+def test_neutralize_hashtags_edge_cases(src, expected):
+    from kb.textutil import neutralize_hashtags
+
+    assert neutralize_hashtags(src) == expected.replace("{e}", chr(92) + "#")
+
+
+def test_summary_and_queue_line_never_carry_live_tags(settings):
+    """Re-judge MEDIUM 2: model text lands in wiki/, where tags drive Bases views."""
+    body = render_body(
+        SummaryResult(title="T", tldr="Federer shares #tennis tips.", key_points=["Uses #ai for scouting"])
+    )
+    esc = chr(92) + "#"
+    assert f"{esc}tennis" in body and f"{esc}ai" in body
+    assert "# T" in body

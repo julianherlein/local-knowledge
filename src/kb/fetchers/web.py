@@ -45,9 +45,12 @@ _BINARY_MAGIC = (b"%PDF-", b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"PK\x03\x04", 
 # Login, consent and subscription walls, recognised on the URL a redirect lands on.
 _WALL_WORD = re.compile(
     r"^(?:consent|guce|login|log-in|logon|signin|sign-in|sign_in|subscribe|subscription|account|accounts"
-    r"|myaccount|auth|oauth|sso|paywall|register|signup)(?:$|[._-])",
+    # Whole segment (or `login.php`), never a slug prefix like `login-form-design`.
+    r"|myaccount|auth|oauth|sso|paywall|register|signup)(?:$|\.)",
     re.IGNORECASE,
 )
+
+_LOCALE = re.compile(r"[a-z]{2}(?:[-_][a-z]{2})?", re.IGNORECASE)
 
 _clock = time.monotonic  # tests replace this to simulate a slow server without sleeping
 
@@ -82,12 +85,20 @@ def parse_content_type(value: str) -> tuple[str, str | None]:
 def is_wall_redirect(requested: str, final: str) -> bool:
     """A redirect that landed on a login / consent / subscribe page instead of the content."""
     req, fin = urlsplit(requested), urlsplit(final)
-    if (req.hostname, req.path.rstrip("/")) == (fin.hostname, fin.path.rstrip("/")):
-        return False
-    host = (fin.hostname or "").removeprefix("www.")
-    first_label = host.split(".", 1)[0]
-    segments = [seg for seg in fin.path.split("/") if seg]
-    return bool(_WALL_WORD.match(first_label) or any(_WALL_WORD.match(seg) for seg in segments))
+    if fin.path.rstrip("/") == req.path.rstrip("/"):
+        return False  # apex -> www, http -> https, trailing slash: same page
+    req_label = (req.hostname or "").removeprefix("www.").split(".", 1)[0]
+    fin_label = (fin.hostname or "").removeprefix("www.").split(".", 1)[0]
+    if fin_label != req_label and _WALL_WORD.match(fin_label):
+        return True  # consent.example.com, accounts.example.com, login.example.com
+    # Only where a wall lives: the first path segment (after an optional locale such as
+    # /en/ or /es-ar/), and only if the requested URL did not already have it there.
+    # Scanning every segment flagged real articles like /articles/login-walls.
+    segs = [seg for seg in fin.path.split("/") if seg]
+    if segs and _LOCALE.fullmatch(segs[0]):
+        segs = segs[1:]
+    req_segs = {seg.lower() for seg in req.path.split("/") if seg}
+    return bool(segs) and segs[0].lower() not in req_segs and bool(_WALL_WORD.match(segs[0]))
 
 
 def _wall_error(requested: str, final: str) -> FetchError:

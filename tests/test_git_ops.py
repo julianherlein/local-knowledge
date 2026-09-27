@@ -165,3 +165,33 @@ def test_two_trackers_in_one_process_share_pending(settings, queue, vault_dir):
     Vault(vault_dir, Tracker(vault_dir, queue)).write("digests/daily/2026-09-26.md", "D\n")
     ok, _ = run_t.commit()
     assert ok and committed_files(vault_dir) == {"raw/web/r.md", "digests/daily/2026-09-26.md"}
+
+
+def test_empty_daily_note_from_obsidian_is_not_a_manual_edit(settings, queue, vault_dir):
+    """Re-judge MEDIUM 4: Obsidian creates an empty note before the digest fills it."""
+    note = vault_dir / "digests" / "daily" / "2026-09-27.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("")
+    t = Tracker(vault_dir, queue)
+    Vault(vault_dir, t).write("digests/daily/2026-09-27.md", "# Digest\n")
+    ok, msg = t.commit()
+    assert ok and "manual" not in msg and committed_files(vault_dir) == {"digests/daily/2026-09-27.md"}
+
+
+def test_note_with_user_text_is_still_protected(settings, queue, vault_dir):
+    note = vault_dir / "digests" / "daily" / "2026-09-27.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("my thoughts\n")
+    t = Tracker(vault_dir, queue)
+    Vault(vault_dir, t).write("digests/daily/2026-09-27.md", "# Digest\nmy thoughts\n")
+    ok, msg = t.commit()
+    assert not ok and "digests/daily/2026-09-27.md" in msg
+
+
+def test_read_head_commit_is_unsure_when_ref_unresolvable(tmp_path):
+    from kb.git_ops import read_head_commit
+
+    repo = tmp_path / "r"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/.invalid\n")  # reftable layout
+    assert read_head_commit(repo) is None

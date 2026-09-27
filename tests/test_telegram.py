@@ -476,3 +476,9 @@ def test_start_with_url_still_captures(ctx, router):
     bot = Bot(router, [upd(100, msg)])
     rep = tg.poll(ctx)
     assert rep.enqueued == 1 and bot.sent[0]["text"] != tg.USAGE
+
+
+def test_404_explains_a_malformed_token():
+    """Re-judge L8: Telegram answers 404 for a token with stray spaces or quotes."""
+    msg = tg.explain(tg.TelegramError(404, "Not Found"))
+    assert "TELEGRAM_BOT_TOKEN" in msg and "spaces or quotes" in msg

@@ -42,7 +42,8 @@ UPGRADE_HINT = "YouTube may have broken yt-dlp: run `uv lock --upgrade-package y
 # content isn't available, try again later", and one rate-limit window must not turn a
 # whole backfill of videos into failed_permanent.
 _RATE_LIMITED = re.compile(
-    r"try again later|rate[- ]?limit|too many requests|\bhttp error 429\b|\b429\b",
+    # No bare "429": video ids like "abcdefg-429" appear in yt-dlp messages.
+    r"try again later|rate[- ]?limit|too many requests|\bhttp error 429\b",
     re.IGNORECASE,
 )
 _NOT_YET = re.compile(r"live event will begin|premieres? in|premiere will begin|is_upcoming", re.IGNORECASE)

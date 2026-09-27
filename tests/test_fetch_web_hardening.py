@@ -109,3 +109,33 @@ def test_451_is_permanent(ctx, respx_mock):
     with pytest.raises(FetchError) as ei:
         web.fetch(make_item(), ctx)
     assert (ei.value.permanent, ei.value.reason) == (True, "http_451")
+
+
+@pytest.mark.parametrize(
+    "requested, final",
+    [
+        ("https://nngroup.com/articles/login-walls", "https://www.nngroup.com/articles/login-walls/"),
+        ("https://example.com/account-management-guide", "https://www.example.com/account-management-guide"),
+        ("https://blog.example.com/auth-patterns", "https://blog.example.com/auth-patterns/"),
+        ("https://bit.ly/abc", "https://example.com/posts/login-flow-design"),
+        ("https://example.com/p/42", "https://example.com/2024/05/register-allocation"),
+        ("https://t.co/xyz", "https://example.com/subscription-economy"),
+    ],
+)
+def test_real_articles_with_wall_words_are_not_walls(requested, final):
+    """Re-judge NEW-H1: these used to fail permanently as login_wall."""
+    assert not web.is_wall_redirect(requested, final)
+
+
+@pytest.mark.parametrize(
+    "final",
+    [
+        "https://example.com/login?next=/posts/x",
+        "https://example.com/en/login",
+        "https://example.com/es-ar/subscribe",
+        "https://consent.example.com/?continue=x",
+        "https://login.example.com/",
+    ],
+)
+def test_walls_are_still_detected(final):
+    assert web.is_wall_redirect("https://example.com/posts/x", final)

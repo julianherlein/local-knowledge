@@ -6,11 +6,14 @@ Stop conditions, in order:
 1. the watermark `x.last_bookmark_id` (the newest bookmark already enqueued). The
    list is ordered by *bookmark* time, not post id, so the check is equality, never
    `id <= watermark`;
-2. a whole page whose ids are all in the DB *as bookmarks* (origin `x_bookmark` or
-   `backfill`). This covers a watermark that was un-bookmarked since the last run (we
-   would never see it again). Items that entered the DB another way (Telegram, CLI)
-   do not count: bookmarking twenty posts you had already sent from your phone must
-   not end the walk above the genuinely new bookmarks further down;
+2. the first post already in the DB *as a bookmark* (origin `x_bookmark` or `backfill`).
+   The list is in bookmark order, so everything below it was bookmarked earlier and is
+   either captured or older than what the engine tracks (history comes only from
+   `kb backfill-x`). This covers a watermark that was un-bookmarked since the last run
+   (the read-later pattern): without it the walk would continue into never-enqueued
+   history and import, and pay for, up to ~800 old posts. Items that entered the DB
+   another way (Telegram, CLI) do not count: bookmarking posts you had already sent
+   from your phone must not end the walk above the genuinely new bookmarks below;
 3. `x.max_bookmark_pages` pages (40 x 20 = the API's ~800 bookmark cap);
 4. no `next_token`.
 
@@ -105,20 +108,19 @@ def poll(ctx: CaptureContext) -> CaptureReport:
             rep.seen += len(ids)
             if newest is None and ids:
                 newest = ids[0]
-            hit = False
+            known = known_bookmarks(q, ids) if trust_known_pages else set()
             for pid in ids:
                 if pid == watermark:
-                    hit = True
+                    stop_reason = "watermark"
+                    break
+                if pid in known:
+                    stop_reason = "known_bookmark"
                     break
                 new_ids.append(pid)
-            if hit:
-                stop_reason = "watermark"
+            if stop_reason:
                 break
             if first_run:
                 stop_reason = "first_run"
-                break
-            if trust_known_pages and ids and known_bookmarks(q, ids) == set(ids):
-                stop_reason = "known_page"
                 break
             meta = page.get("meta") if isinstance(page.get("meta"), dict) else {}
             token = meta.get("next_token") if isinstance(meta.get("next_token"), str) else None

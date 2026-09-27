@@ -290,8 +290,14 @@ Structure (keep the headings exactly):
 - `## Overview`: one or two paragraphs on what this domain covers here and its main threads.
   Rewrite it when the domain's shape changes, not on every compile.
 - `## Key concepts`: the 5 to 10 most important pages, most central first (most citing sources,
-  then most links from other pages). Line format, exactly:
+  then most links from other pages). With fewer than 5 pages in the domain, list all of them.
+  Line format, exactly:
   `- [[wiki/concepts/idempotency]]: at most 15 words on why it matters in this domain`
+- **Placeholders.** A new hub holds italic placeholder lines (`_Not written yet..._`,
+  `_None yet..._`). Whichever session first adds a page to the hub replaces them, even when it
+  is compiling another domain and only reached this hub through a page's secondary domain:
+  write a one- or two-sentence Overview from what the wiki holds so far, list the pages in Key
+  concepts, and delete the placeholder lines. Later sessions grow them under the rules above.
 - `## Catalog`: every concept, entity and synthesis page whose `domains` include this domain and
   that is **not listed in one of this hub's sub-hubs**, one line each, alphabetical by file name
   inside `### Concepts`, `### Entities`, `### Syntheses`. Line format, exactly:
@@ -513,12 +519,16 @@ in `aliases` and updates every link to the page (grep for `[[wiki/concepts/<old-
 
 1. Guard: no new changes under the protected folders. Run
    `git status --porcelain --untracked-files=all -- raw digests notes .obsidian | grep -vxFf "${TMPDIR:-/tmp}/kb-preflight.txt"`
-   It must print nothing: every protected path that is dirty now was already dirty, in the same
-   way, at preflight. If a line appears:
-   - a tracked file you modified: restore it with `git checkout -- <path>`;
-   - a file you created (shown as `??`): delete it with `rm -- <path>` (checkout cannot restore a
-     file that never existed);
-   then tell the user you broke a rule.
+   Every line it prints is a protected path that changed during the session. Sort each one by
+   who changed it, using your own record of the files you wrote (not the path's location):
+   - **You wrote it** (a tracked file you edited): restore it with `git checkout -- <path>`.
+   - **You created it** (shown as `??`, and you created it this session): delete it with
+     `rm -- <path>` (checkout cannot restore a file that never existed).
+   - **You did not touch it**: the user (a daily-note edit in Obsidian) or the engine (a `kb run`
+     in another terminal) changed it while you worked. Leave it exactly as it is: never check
+     out, delete, stage or commit it. Just list it for the user.
+   If you are not certain you wrote a file, treat it as not yours. Tell the user about any file
+   you restored or deleted: that means you broke the protected-folders rule.
 2. Show `git diff --stat` and a short summary of every created and changed page. Wait for the
    user's approval. Apply requested changes, then show the diff again.
 3. Stage exactly the files you changed, by path (`git add -- <path> <path> ...`). Never

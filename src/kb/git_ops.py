@@ -113,7 +113,8 @@ def read_head_commit(repo: Path) -> str | None:
             for line in packed.read_text(encoding="utf-8").splitlines():
                 if line.endswith(" " + ref):
                     return line.split(" ", 1)[0]
-        return "unborn"  # branch has no commits yet
+        # Unborn branch, or a ref backend we do not parse (reftable): unsure, ask git.
+        return None
     except OSError:
         return None
 
@@ -199,7 +200,15 @@ class Tracker:
         self._load()
         current = self._current(rel)
         entry = self.pending.get(rel) or PendingEntry()
-        if not entry.tainted and not self._is_ours(rel, current) and self.differs_from_head(rel):
+        # An untracked empty file (Obsidian's "open today's daily note" creates one) holds no
+        # user content, so overwriting and committing it sweeps nothing in.
+        empty_placeholder = current is not None and not current.strip() and rel not in self._head
+        if (
+            not entry.tainted
+            and not empty_placeholder
+            and not self._is_ours(rel, current)
+            and self.differs_from_head(rel)
+        ):
             log.warning("manual edits in %s; auto commit leaves it for you to commit", rel)
             entry.tainted = True
         entry.shas = (entry.shas + [sha256_bytes(data)])[-MAX_SHAS:]
