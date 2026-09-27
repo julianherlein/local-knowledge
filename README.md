@@ -196,7 +196,8 @@ uv run pytest -m "not slow and not live"   # gate lane (pre-commit hook), no git
 uv run pytest -m "not live"                # everything deterministic, incl. real-git tests (~1 min on Windows)
 KB_LIVE_NET=1 uv run pytest -m live        # real web pages / YouTube
 KB_LIVE_LLM=1 uv run pytest -m live services/llm
-uv run python -m evals.run                 # paid: classifier accuracy (>=85%) + summary faithfulness checks
+uv run python -m evals.run                 # paid, on Haiku by default: classifier accuracy (>=85%) + summary checks
+uv run python -m evals.run --model claude-opus-5-5   # before switching llm.model to another model
 ```
 
 Enable the hook once per clone: `git config core.hooksPath .githooks`.
