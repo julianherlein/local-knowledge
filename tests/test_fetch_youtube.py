@@ -112,7 +112,7 @@ def test_original_language_falls_back_to_orig_track():
 def test_auto_rolling_captions_dedup_exact_text():
     # Every phrase once, the genuine "fun fun fun" repetition kept, tags and entities gone.
     assert vtt.clean_vtt(AUTO_VTT) == (
-        "[00:00] so today we're talking about Q&A and it's going to be fun fun fun [Music] okay >> welcome"
+        "[00:00] so today we're talking about Q&A and it's going to be fun fun fun\n\n[01:03] [Music] okay >> welcome"
     )
 
 
@@ -134,6 +134,72 @@ def test_lone_space_line_cue_without_freeze_keeps_its_words():
     assert vtt.clean_vtt(text) == "[00:01] hello there final words"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("﻿WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello there.\n", "[00:01] Hello there."),
+        (  # one comma timestamp (SRT habit) is read, not fatal
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello there.\n\n00:00:03,000 --> 00:00:04,000\nstill here\n\n"
+            "00:00:05.000 --> 00:00:06.000\nGeneral Kenobi.\n",
+            "[00:01] Hello there. still here General Kenobi.",
+        ),
+        (  # an unreadable cue is skipped, the rest survives
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello there.\n\n00:00:xx.000 --> 00:00:04.000\nlost\n\n"
+            "00:00:05.000 --> 00:00:06.000\nGeneral Kenobi.\n",
+            "[00:01] Hello there. General Kenobi.",
+        ),
+        (  # whitespace-only separator between manual cues: two cues, no id text leaking
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello there.\n   \n00:01:03.000 --> 00:01:04.000\nGeneral Kenobi.\n",
+            "[00:01] Hello there.\n\n[01:03] General Kenobi.",
+        ),
+        (
+            "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHello there.\n  \n2\n00:00:03.000 --> 00:00:04.000\nGeneral Kenobi.\n",
+            "[00:01] Hello there. General Kenobi.",
+        ),
+        (
+            "WEBVTT - title\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n\nSTYLE\n::cue { color: red }\n\n"
+            "NOTE a comment\n\n00:01.000 --> 00:02.000\nNo hours here.\n",
+            "[00:01] No hours here.",
+        ),
+    ],
+    ids=["bom", "comma-cue", "bad-cue", "ws-separator", "ids-ws-separator", "headers-style-note"],
+)
+def test_tolerant_parsing(text, expected):
+    assert vtt.clean_vtt(text) == expected
+
+
+def test_rolling_keeps_a_genuinely_repeated_line():
+    # A chorus: the same line spoken three times must appear three times.
+    text = (
+        "WEBVTT\n\n"
+        "00:00:01.000 --> 00:00:02.000\n \nna<00:00:01.500><c> na</c>\n\n"
+        "00:00:02.000 --> 00:00:02.010\nna na\n \n\n"
+        "00:00:02.010 --> 00:00:03.000\nna na\nna<00:00:02.500><c> na</c>\n\n"
+        "00:00:03.000 --> 00:00:03.010\nna na\n \n\n"
+        "00:00:03.010 --> 00:00:04.000\nna na\nna<00:00:03.500><c> na</c>\n\n"
+        "00:00:04.000 --> 00:00:04.010\nna na\n \n\n"
+        "00:00:04.010 --> 00:00:05.000\nna na\nhey<00:00:04.500><c> you</c>\n"
+    )
+    assert vtt.clean_vtt(text) == "[00:01] na na na na na na hey you"
+
+
+def test_rolling_cue_after_cleared_screen_keeps_repeated_word():
+    text = (
+        "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n \nyes\n\n00:00:02.000 --> 00:00:02.010\nyes\n \n\n"
+        "00:00:20.000 --> 00:00:21.000\n \nyes<00:00:20.500><c> indeed</c>\n"
+    )
+    assert vtt.clean_vtt(text) == "[00:01] yes yes indeed"
+
+
+def test_one_karaoke_cue_does_not_flip_a_manual_file_into_rolling_mode():
+    text = (
+        "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nNo.\n\n00:00:02.000 --> 00:00:03.000\nNo.\n\n"
+        "00:00:03.000 --> 00:00:04.000\nsing<00:00:03.500> along\n"
+    )
+    assert vtt.clean_vtt(text) == "[00:01] No. No. sing along"
+    assert vtt.is_rolling(vtt.parse_cues(AUTO_VTT)) and not vtt.is_rolling(vtt.parse_cues(MANUAL_VTT))
+
+
 def test_crlf_vtt_is_handled():
     assert vtt.clean_vtt(AUTO_VTT.replace("\n", "\r\n")) == vtt.clean_vtt(AUTO_VTT)
 
@@ -150,6 +216,22 @@ def test_crlf_vtt_is_handled():
 )
 def test_vtt_without_usable_cues_is_empty(text):
     assert vtt.clean_vtt(text) == ""
+
+
+def test_bom_and_one_malformed_cue_do_not_empty_the_transcript():
+    """Fetcher critic M4: a BOM or a single bad timestamp used to drop every cue."""
+    good = "00:00:01.000 --> 00:00:02.000\nfirst words\n\n"
+    bad = "00:00:03,000 --> 00:00:04,000\nbroken cue\n\n"
+    tail = "00:00:05.000 --> 00:00:06.000\nlast words\n"
+    out = vtt.clean_vtt(chr(0xFEFF) + "WEBVTT\n\n" + good + bad + tail)
+    assert "first words" in out and "last words" in out
+
+
+def test_whitespace_only_separator_does_not_merge_cues():
+    """Fetcher critic L3."""
+    text = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nOne.\n   \n00:01:10.000 --> 00:01:11.000\nTwo.\n"
+    out = vtt.clean_vtt(text)
+    assert out.startswith("[00:01] One.") and "Two." in out
 
 
 def test_entities_and_voice_tags_are_decoded():
@@ -186,11 +268,12 @@ def test_markers_break_at_sentence_ends_roughly_every_interval_without_losing_wo
     assert re.sub(r"\[[\d:]+\] ", "", out).split() == words
 
 
-def test_unpunctuated_captions_are_cut_at_the_hard_limit():
+def test_unpunctuated_captions_break_at_marker_time():
+    # Auto captions rarely have sentence ends; waiting for one would stretch markers to 90s.
     text, words = synthetic_vtt(n_cues=100, step=5)
     out = vtt.clean_vtt(text, marker_every_s=60)
     gaps = [b - a for a, b in zip(markers(out), markers(out)[1:], strict=False)]
-    assert gaps and all(g == 90 for g in gaps), gaps
+    assert gaps and all(g == 60 for g in gaps), gaps
     assert re.sub(r"\[[\d:]+\] ", "", out).split() == words
 
 
@@ -328,7 +411,8 @@ def test_fetch_auto_original_language_track(ctx, respx_mock, fake_info):
     assert got.extra["subtitles"] == "auto" and got.extra["subtitle_lang"] == "en-orig"
     assert got.language == "en"
     assert got.body == (
-        "## Transcript\n\n[00:00] so today we're talking about Q&A and it's going to be fun fun fun [Music] okay >> welcome\n"
+        "## Transcript\n\n[00:00] so today we're talking about Q&A and it's going to be fun fun fun\n\n"
+        "[01:03] [Music] okay >> welcome\n"
     )
 
 
@@ -393,7 +477,17 @@ def download_error(msg: str) -> Exception:
             False,
             "ytdlp_error",
         ),
-        ("This live event will begin in 3 hours.", False, "ytdlp_error"),
+        ("This live event will begin in 3 hours.", False, "not_yet_available"),
+        ("Premieres in 2 days", False, "not_yet_available"),
+        # The exact yt-dlp 2026.8 rate-limit text: starts with "Video unavailable" but is transient.
+        (
+            "Video unavailable. This content isn't available, try again later. The current session has been "
+            "rate-limited by YouTube for up to an hour. It is recommended to use `-t sleep` to add a delay "
+            "between video requests to avoid exceeding the rate limit.",
+            False,
+            "ytdlp_rate_limited",
+        ),
+        ("Unable to download API page: HTTP Error 429: Too Many Requests", False, "ytdlp_rate_limited"),
     ],
 )
 def test_download_error_mapping(ctx, fake_info, msg, permanent, reason):
@@ -459,6 +553,22 @@ def test_extract_info_calls_ytdlp_without_downloading(monkeypatch):
     assert youtube.extract_info(URL) == {"id": "aBcDeFgHiJk"}
     assert seen["call"] == (URL, False)
     assert seen["opts"]["noplaylist"] and seen["opts"]["skip_download"] and seen["opts"]["quiet"]
+    # Format selection must never fail a metadata + subtitles extraction.
+    assert seen["opts"]["ignore_no_formats_error"] is True
+
+
+@pytest.mark.parametrize("status", ["is_live", "is_upcoming", "post_live"])
+def test_live_and_upcoming_streams_are_retried_later(ctx, fake_info, status):
+    fake_info({**INFO_NOSUBS, "live_status": status})
+    with pytest.raises(FetchError) as ei:
+        youtube.fetch(make_item(URL, "youtube"), ctx)
+    assert (ei.value.permanent, ei.value.reason) == (False, "not_yet_available")
+
+
+def test_ended_stream_with_subtitles_is_fetched(ctx, respx_mock, fake_info):
+    fake_info({**INFO_CHAPTERS, "live_status": "was_live"})
+    respx_mock.get(vtt_url(INFO_CHAPTERS, "en")).mock(return_value=httpx.Response(200, text=MANUAL_VTT))
+    assert youtube.fetch(make_item(URL, "youtube"), ctx).extra["subtitles"] == "manual"
 
 
 def test_playlist_result_is_rejected(ctx, fake_info):

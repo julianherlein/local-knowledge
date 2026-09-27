@@ -132,17 +132,18 @@ def test_watermark_on_page_two(ctx, queue):
 
 
 @respx.mock
-def test_unbookmarked_watermark_stops_on_a_fully_known_page(ctx, queue):
-    queue.set_state("x.last_bookmark_id", "1")  # no longer bookmarked: never seen again
+def test_known_page_newer_than_watermark_keeps_walking(ctx, queue):
+    """X critic M4: posts already captured via Telegram/CLI must not hide older new bookmarks."""
+    queue.set_state("x.last_bookmark_id", "1")
     enqueue(queue, "8", "7")
     route = respx.get(BOOKMARKS).mock(
         side_effect=serve({None: (["10", "9"], "t2"), "t2": (["8", "7"], "t3"), "t3": (["6", "5"], None)})
     )
     rep = x_bookmarks.poll(ctx)
-    assert route.call_count == 2  # page t3 is never requested
-    assert ids_in_queue(queue) == ["8", "7", "9", "10"]
+    assert route.call_count == 3
+    assert set(ids_in_queue(queue)) == {"10", "9", "8", "7", "6", "5"}
     assert queue.get_state("x.last_bookmark_id") == "10"
-    assert rep.enqueued == 2 and rep.duplicates == 2
+    assert rep.enqueued == 4 and rep.duplicates == 2
 
 
 @respx.mock

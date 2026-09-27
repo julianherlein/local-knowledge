@@ -187,11 +187,14 @@ def expand_text(
     the quoted post. Returns the text and the expanded non-X links (in order)."""
     drop = set(drop_urls or ())
     repl: dict[str, str] = {}
+    url_entities = [e for e in url_entities if isinstance(e, dict)]
     for e in url_entities:
         short = e.get("url")
-        if not short:
+        if not isinstance(short, str) or not short:
             continue
         target = e.get("unwound_url") or e.get("expanded_url") or ""
+        if not isinstance(target, str):
+            target = ""
         sid = _STATUS_ID.search(target)
         if e.get("media_key") or (target and is_x_url(target) and _X_MEDIA_PATH.search(urlsplit(target).path)):
             drop.add(short)
@@ -207,13 +210,16 @@ def expand_text(
         link = m.group(0)
         return "" if link in drop else repl.get(link, link)
 
-    out = TCO.sub(swap, text)  # whole tokens only: t.co/abc never matches inside t.co/abcd
+    # Decode &amp; etc. in the post text BEFORE inserting links: unescaping afterwards
+    # would turn "&region=us" inside an expanded URL into "®ion=us" (HTML5 accepts
+    # some legacy entities without the semicolon). Whole tokens only: t.co/abc never
+    # matches inside t.co/abcd.
+    out = TCO.sub(swap, html.unescape(text))
     outlinks: list[str] = []
     for e in url_entities:  # entity order == text order
         target = repl.get(e.get("url") or "")
         if target and not is_x_url(target) and target not in outlinks:
             outlinks.append(target)
-    out = html.unescape(out)
     out = "\n".join(ln.rstrip() for ln in out.strip().splitlines())
     return Rendered(out, outlinks)
 
@@ -294,45 +300,63 @@ def build_item(posts: list[Post], *, url_post: Post, thread: str | None) -> Fetc
 
 
 # API response parsing -------------------------------------------------------------------
+def _obj(v: Any) -> dict[str, Any]:
+    """`v` if it is a JSON object, else {}. Responses are parsed defensively: a field of
+    the wrong type must degrade to "missing", never to an AttributeError."""
+    return v if isinstance(v, dict) else {}
+
+
+def _objs(v: Any) -> list[dict[str, Any]]:
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
+def _str(v: Any) -> str | None:
+    return str(v) if isinstance(v, str | int) and not isinstance(v, bool) and str(v) else None
+
+
 def _includes(resp: dict[str, Any]) -> dict[str, Any]:
-    inc = resp.get("includes") or {}
+    inc = _obj(resp.get("includes"))
     return {
-        "users": {u["id"]: u for u in inc.get("users") or [] if u.get("id")},
-        "media": {m["media_key"]: m for m in inc.get("media") or [] if m.get("media_key")},
-        "tweets": {t["id"]: t for t in (inc.get("tweets") or []) + (inc.get("posts") or []) if t.get("id")},
+        "users": {_str(u.get("id")): u for u in _objs(inc.get("users")) if _str(u.get("id"))},
+        "media": {_str(m.get("media_key")): m for m in _objs(inc.get("media")) if _str(m.get("media_key"))},
+        "tweets": {
+            _str(t.get("id")): t for t in _objs(inc.get("tweets")) + _objs(inc.get("posts")) if _str(t.get("id"))
+        },
     }
 
 
 def parse_api_post(t: dict[str, Any], inc: dict[str, Any], *, depth: int = 0) -> Post:
-    note = t.get("note_tweet") or t.get("note_post") or {}
-    if note.get("text"):
+    note = _obj(t.get("note_tweet") or t.get("note_post"))
+    if isinstance(note.get("text"), str) and note["text"]:
         text = note["text"]
-        entities = note.get("entities") or {}
+        entities = _obj(note.get("entities"))
     else:
-        text = t.get("text") or ""
-        entities = t.get("entities") or {}
-    refs = t.get("referenced_tweets") or t.get("referenced_posts") or []
-    replied = next((r.get("id") for r in refs if r.get("type") == "replied_to"), None)
-    quoted = next((r.get("id") for r in refs if r.get("type") == "quoted"), None)
-    user = inc["users"].get(t.get("author_id") or "", {})
+        text = t.get("text") if isinstance(t.get("text"), str) else ""
+        entities = _obj(t.get("entities"))
+    refs = _objs(t.get("referenced_tweets") or t.get("referenced_posts"))
+    replied = next((_str(r.get("id")) for r in refs if r.get("type") == "replied_to"), None)
+    quoted = next((_str(r.get("id")) for r in refs if r.get("type") == "quoted"), None)
+    user = _obj(inc["users"].get(_str(t.get("author_id"))))
     media = []
-    for key in (t.get("attachments") or {}).get("media_keys") or []:
-        m = inc["media"].get(key)
+    keys = _obj(t.get("attachments")).get("media_keys")
+    for key in keys if isinstance(keys, list) else []:
+        m = _obj(inc["media"].get(_str(key)))
         if m:
-            media.append(Media(m.get("type", "photo"), m.get("url") or m.get("preview_image_url"), m.get("alt_text")))
+            url = _str(m.get("url")) or _str(m.get("preview_image_url"))
+            media.append(Media(_str(m.get("type")) or "photo", url, _str(m.get("alt_text"))))
     p = Post(
-        id=str(t["id"]),
+        id=_str(t.get("id")) or "",
         text=text,
-        author_id=t.get("author_id"),
-        username=user.get("username"),
-        name=user.get("name"),
+        author_id=_str(t.get("author_id")),
+        username=_str(user.get("username")),
+        name=_str(user.get("name")),
         created_at=parse_created(t.get("created_at")),
-        conversation_id=t.get("conversation_id"),
-        in_reply_to_user_id=t.get("in_reply_to_user_id"),
+        conversation_id=_str(t.get("conversation_id")),
+        in_reply_to_user_id=_str(t.get("in_reply_to_user_id")),
         replied_to=replied,
         quoted_id=quoted,
-        lang=t.get("lang"),
-        url_entities=list(entities.get("urls") or []),
+        lang=_str(t.get("lang")),
+        url_entities=_objs(entities.get("urls")),
         media=media,
     )
     if quoted and depth == 0 and quoted in inc["tweets"]:
@@ -341,6 +365,7 @@ def parse_api_post(t: dict[str, Any], inc: dict[str, Any], *, depth: int = 0) ->
 
 
 def _classify_errors(errors: list[dict[str, Any]], post_id: str) -> FetchError:
+    errors = _objs(errors) or [{}]
     err = next((e for e in errors if str(e.get("resource_id") or e.get("value") or "") == post_id), errors[0])
     kind = f"{err.get('type', '')} {err.get('title', '')}"
     detail = err.get("detail") or err.get("title") or "unknown error"
@@ -394,12 +419,16 @@ def search_thread(client: XClient, root: Post) -> list[Post]:
         except (XApiError, x_auth.XAuthError) as e:
             raise _api_error(e, f"thread {root.id}") from e
         inc = _includes(resp)
-        out.extend(parse_api_post(t, inc) for t in resp.get("data") or [] if t.get("id"))
-        token = (resp.get("meta") or {}).get("next_token")
+        out.extend(parse_api_post(t, inc) for t in _objs(resp.get("data")) if _str(t.get("id")))
+        token = _str(_obj(resp.get("meta")).get("next_token"))
         if not token:
             break
         params["next_token"] = token
     return out
+
+
+def _id_key(p: Post) -> int:
+    return int(p.id) if p.id.isdigit() else 0
 
 
 def self_chain(root: Post, candidates: list[Post]) -> list[Post]:
@@ -408,7 +437,7 @@ def self_chain(root: Post, candidates: list[Post]) -> list[Post]:
     kept = {root.id}
     chain = [root]
     epoch = datetime.min.replace(tzinfo=UTC)
-    for p in sorted(candidates, key=lambda c: (c.created_at or epoch, int(c.id))):
+    for p in sorted(candidates, key=lambda c: (c.created_at or epoch, _id_key(c))):
         if p.id in kept or p.author_id != root.author_id:
             continue
         if p.conversation_id and p.conversation_id != (root.conversation_id or root.id):
@@ -456,7 +485,7 @@ def fetch_via_api(item: Item, ctx: Any, post_id: str, now: datetime) -> FetchedI
     chain = self_chain(root, candidates)
     if post.id not in {p.id for p in chain}:
         chain.append(post)  # search index lag: never drop the bookmarked post itself
-        chain.sort(key=lambda c: int(c.id))
+        chain.sort(key=_id_key)
     return build_item(chain, url_post=post, thread="complete")
 
 
@@ -468,25 +497,28 @@ def _unwrap_graphql(t: Any) -> dict[str, Any] | None:
     return t if isinstance(t, dict) and isinstance(t.get("legacy"), dict) else None
 
 
-def _gql_user(t: dict[str, Any]) -> tuple[str | None, str | None]:
-    u = ((t.get("core") or {}).get("user_results") or {}).get("result") or {}
-    core, legacy = u.get("core") or {}, u.get("legacy") or {}
-    return core.get("screen_name") or legacy.get("screen_name"), core.get("name") or legacy.get("name")
+def _gql_user(t: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """(screen_name, name, user id) of a GraphQL tweet's author."""
+    u = _obj(_obj(_obj(t.get("core")).get("user_results")).get("result"))
+    core, legacy = _obj(u.get("core")), _obj(u.get("legacy"))
+    return (
+        _str(core.get("screen_name")) or _str(legacy.get("screen_name")),
+        _str(core.get("name")) or _str(legacy.get("name")),
+        _str(u.get("rest_id")),
+    )
 
 
 def _gql_text_and_urls(t: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    legacy = t.get("legacy") or {}
-    note = (((t.get("note_tweet") or {}).get("note_tweet_results") or {}).get("result")) or {}
-    if note.get("text"):
-        return note["text"], list((note.get("entity_set") or {}).get("urls") or [])
-    return legacy.get("full_text") or "", list((legacy.get("entities") or {}).get("urls") or [])
+    legacy = _obj(t.get("legacy"))
+    note = _obj(_obj(_obj(t.get("note_tweet")).get("note_tweet_results")).get("result"))
+    if _str(note.get("text")):
+        return note["text"], _objs(_obj(note.get("entity_set")).get("urls"))
+    return _str(legacy.get("full_text")) or "", _objs(_obj(legacy.get("entities")).get("urls"))
 
 
 def _gql_media(t: dict[str, Any]) -> list[dict[str, Any]]:
-    legacy = t.get("legacy") or {}
-    return list(
-        (legacy.get("extended_entities") or {}).get("media") or (legacy.get("entities") or {}).get("media") or []
-    )
+    legacy = _obj(t.get("legacy"))
+    return _objs(_obj(legacy.get("extended_entities")).get("media")) or _objs(_obj(legacy.get("entities")).get("media"))
 
 
 def _resolve_tco(http: httpx.Client, links: list[str]) -> list[dict[str, Any]]:
@@ -504,71 +536,82 @@ def _resolve_tco(http: httpx.Client, links: list[str]) -> list[dict[str, Any]]:
     return out
 
 
-def export_post(rec: dict[str, Any], http: httpx.Client | None) -> tuple[Post, bool, bool]:
-    """A Post from a twitter-web-exporter record. Returns (post, is_reply, is_self_reply).
+def export_post(rec: dict[str, Any], http: httpx.Client | None) -> tuple[Post, str | None]:
+    """A Post from a twitter-web-exporter record, plus its `thread` value.
 
     Exporter fields (src/components/table/columns-tweet.tsx): id, created_at (formatted,
     default `YYYY-MM-DD HH:mm:ss Z`), full_text (note text when present, t.co links
     unexpanded), media [{type, url (the t.co link), thumbnail, original, ext_alt_text}],
     screen_name, name, in_reply_to (parent id), quoted_status (quoted id only), url, and
     `metadata` (the raw GraphQL tweet) when "Include all metadata" was ticked. The
-    metadata, when present, supplies expanded links, the quoted post's text and `lang`.
+    metadata, when present, supplies expanded links, the quoted post's text, `lang`, and
+    who a reply answers.
+
+    Thread (none of this can be verified offline, recent search only sees 7 days):
+    a root, a self-reply, or a reply whose target is unknown -> "incomplete"; a reply
+    known to answer someone else -> None.
     """
     meta = _unwrap_graphql(rec.get("metadata"))
-    post_id = str(rec.get("id") or (meta or {}).get("rest_id") or "")
-    username = rec.get("screen_name")
-    if not username and isinstance(rec.get("url"), str):
-        m = re.match(r"https?://(?:www\.)?(?:twitter|x)\.com/([^/]+)/status", rec["url"])
+    post_id = _str(rec.get("id")) or _str((meta or {}).get("rest_id")) or ""
+    username = _str(rec.get("screen_name"))
+    url = _str(rec.get("url"))
+    if not username and url:
+        m = re.match(r"https?://(?:www\.)?(?:twitter|x)\.com/([^/]+)/status", url)
         username = m.group(1) if m and m.group(1) != "i" else None
-    name = rec.get("name")
-    text = rec.get("full_text") or ""
+    name = _str(rec.get("name"))
+    text = _str(rec.get("full_text")) or ""
     url_entities: list[dict[str, Any]] = []
     lang = None
     quoted: Post | None = None
-    self_reply = False
     created = parse_created(rec.get("created_at"))
-    in_reply = rec.get("in_reply_to")
-    quoted_id = str(rec["quoted_status"]) if rec.get("quoted_status") else None
+    in_reply = _str(rec.get("in_reply_to"))
+    quoted_id = _str(rec.get("quoted_status"))
+    reply_target_known = False
+    self_reply = False
 
     if meta:
         mtext, url_entities = _gql_text_and_urls(meta)
         text = text or mtext
         legacy = meta["legacy"]
-        lang = legacy.get("lang")
+        lang = _str(legacy.get("lang"))
         created = created or parse_created(legacy.get("created_at"))
-        in_reply = in_reply or legacy.get("in_reply_to_status_id_str")
-        quoted_id = quoted_id or legacy.get("quoted_status_id_str")
-        mu, mn = _gql_user(meta)
+        in_reply = in_reply or _str(legacy.get("in_reply_to_status_id_str"))
+        quoted_id = quoted_id or _str(legacy.get("quoted_status_id_str"))
+        mu, mn, muid = _gql_user(meta)
         username, name = username or mu, name or mn
-        owner = legacy.get("user_id_str") or ((meta.get("core") or {}).get("user_results") or {}).get("result", {}).get(
-            "rest_id"
-        )
-        self_reply = bool(in_reply and owner and legacy.get("in_reply_to_user_id_str") == owner)
-        q = _unwrap_graphql((meta.get("quoted_status_result") or {}).get("result"))
+        owner = _str(legacy.get("user_id_str")) or muid
+        target = _str(legacy.get("in_reply_to_user_id_str"))
+        reply_target_known = bool(owner and target)
+        self_reply = reply_target_known and owner == target
+        q = _unwrap_graphql(_obj(meta.get("quoted_status_result")).get("result"))
         if q:
             qtext, qurls = _gql_text_and_urls(q)
-            qu, qn = _gql_user(q)
-            qmedia = _gql_media(q)
+            qu, qn, _ = _gql_user(q)
+            qmedia = [{"url": m["url"], "media_key": "m"} for m in _gql_media(q) if _str(m.get("url"))]
             quoted = Post(
-                id=str(q.get("rest_id") or q["legacy"].get("id_str") or quoted_id or ""),
+                id=_str(q.get("rest_id")) or _str(q["legacy"].get("id_str")) or quoted_id or "",
                 text=qtext,
                 username=qu,
                 name=qn,
-                quoted_id=q["legacy"].get("quoted_status_id_str"),
-                url_entities=qurls + [{"url": m.get("url"), "media_key": "m"} for m in qmedia if m.get("url")],
+                quoted_id=_str(q["legacy"].get("quoted_status_id_str")),
+                url_entities=qurls + qmedia,
             )
-            quoted_id = quoted_id or quoted.id
+            quoted_id = quoted_id or quoted.id or None
 
-    media_recs = [m for m in rec.get("media") or [] if isinstance(m, dict)]
     media = []
-    for m in media_recs:
-        mtype = m.get("type") or "photo"
-        media.append(Media(mtype, m.get("original") or m.get("thumbnail"), m.get("ext_alt_text")))
-        if m.get("url"):
+    for m in _objs(rec.get("media")):
+        media.append(
+            Media(
+                _str(m.get("type")) or "photo",
+                _str(m.get("original")) or _str(m.get("thumbnail")),
+                _str(m.get("ext_alt_text")),
+            )
+        )
+        if _str(m.get("url")):
             url_entities.append({"url": m["url"], "media_key": "export"})
 
     if not meta and http is not None:
-        known = {e["url"] for e in url_entities}
+        known = {e.get("url") for e in url_entities}
         bare = [u for u in dict.fromkeys(TCO.findall(text)) if u not in known]
         if quoted_id and bare and text.rstrip().endswith(bare[-1]):
             bare = bare[:-1]  # the trailing link of a quote post is the quoted post
@@ -586,12 +629,13 @@ def export_post(rec: dict[str, Any], http: httpx.Client | None) -> tuple[Post, b
         media=media,
         quoted=quoted,
     )
-    return post, bool(in_reply), self_reply
+    if not in_reply or self_reply or not reply_target_known:
+        return post, "incomplete"
+    return post, None
 
 
 def fetch_from_export(item: Item, ctx: Any, rec: dict[str, Any], post_id: str) -> FetchedItem:
-    post, is_reply, self_reply = export_post({**rec, "id": rec.get("id") or post_id}, getattr(ctx, "http", None))
-    thread = "incomplete" if (not is_reply or self_reply) else None
+    post, thread = export_post({**rec, "id": rec.get("id") or post_id}, getattr(ctx, "http", None))
     return build_item([post], url_post=post, thread=thread)
 
 
@@ -605,12 +649,30 @@ def post_id_of(item: Item) -> str:
 
 def fetch(item: Item, ctx: Any, *, now: datetime | None = None) -> FetchedItem:
     post_id = post_id_of(item)
-    if item.origin == "backfill" and item.inline_text and not ctx.settings.x.backfill_fetch_via_api:
+    if item.origin == "backfill" and not ctx.settings.x.backfill_fetch_via_api:
+        # Offline by contract: `kb run --dry-run` and cost estimates rely on backfill items
+        # never calling the paid API unless x.backfill_fetch_via_api says so.
         try:
-            rec = json.loads(item.inline_text)
+            rec = json.loads(item.inline_text or "")
         except ValueError:
             rec = None
-        if isinstance(rec, dict):
+        if not isinstance(rec, dict):
+            raise FetchError(
+                "backfill record is missing or not a JSON object; re-import it, or set "
+                "x.backfill_fetch_via_api = true to fetch it from the API",
+                permanent=True,
+                reason="backfill_record_invalid",
+            )
+        try:
             return fetch_from_export(item, ctx, rec, post_id)
-        # A corrupt record falls through to the API, which is the source of truth anyway.
-    return fetch_via_api(item, ctx, post_id, now or _now())
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            raise FetchError(
+                f"backfill record could not be rendered: {type(e).__name__}: {e}",
+                permanent=True,
+                reason="backfill_record_invalid",
+            ) from e
+    try:
+        return fetch_via_api(item, ctx, post_id, now or _now())
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        # An X response of an unexpected shape: typed and retryable, never a raw crash.
+        raise FetchError(f"unexpected X API response: {type(e).__name__}: {e}", reason="x_bad_response") from e

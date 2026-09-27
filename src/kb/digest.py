@@ -361,7 +361,10 @@ def _write(vault: Vault, rel: str, meta: dict[str, Any], block: str) -> bool:
     return True
 
 
-def _commit_message(days: list[date], weeks: list[str]) -> str:
+def _commit_message(paths: list[str]) -> str:
+    """`auto: digest <first>..<last> + <weeks>`, from the note paths that are actually committed."""
+    days = sorted(date.fromisoformat(p.rsplit("/", 1)[-1][:10]) for p in paths if p.startswith(DIGEST_DAILY + "/"))
+    weeks = sorted(p.rsplit("/", 1)[-1].removesuffix(".md") for p in paths if p.startswith(DIGEST_WEEKLY + "/"))
     parts = []
     if days:
         parts.append(days[0].isoformat() if len(days) == 1 else f"{days[0].isoformat()}..{days[-1].isoformat()}")
@@ -397,8 +400,6 @@ def run(
     mondays = [parse_week(week)] if week else ([] if explicit else weeks_to_process(days, today))
 
     written: list[str] = []
-    written_days: list[date] = []
-    written_weeks: list[str] = []
     for d in days:
         if not act.active(d):
             continue
@@ -406,7 +407,6 @@ def run(
         meta, block = render_daily(settings, act, d)
         if _write(vault, rel, meta, block):
             written.append(rel)
-            written_days.append(d)
     for monday in mondays:
         name = iso_week(monday)
         rel = f"{DIGEST_WEEKLY}/{name}.md"
@@ -415,7 +415,6 @@ def run(
         meta, block = render_weekly(settings, act, monday)
         if _write(vault, rel, meta, block):
             written.append(rel)
-            written_weeks.append(name)
 
     if not explicit:
         yesterday = today - timedelta(days=1)
@@ -423,7 +422,12 @@ def run(
         if not last or date.fromisoformat(last) < yesterday:
             queue.set_state(STATE_KEY, yesterday.isoformat())
     if commit and written:
-        tracker.commit(message=_commit_message(written_days, written_weeks))
+        # A note the user edited in Obsidian is left out of the auto commit by the Tracker;
+        # name only the notes that will really be in it (and skip the commit if none are).
+        blocked = set(tracker.blockers())
+        committable = [p for p in written if p not in blocked]
+        if committable:
+            tracker.commit(message=_commit_message(committable))
     return written
 
 
