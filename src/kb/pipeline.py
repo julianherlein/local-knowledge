@@ -232,8 +232,10 @@ def run(
             tracker = Tracker(settings.vault_path, queue)
             run_id = queue.start_run()
             vault = Vault(settings.vault_path, tracker)
-            if capture:
-                report.captures = run_captures(CaptureContext(settings, http, queue), say)
+            capture_ctx = CaptureContext(settings, http, queue) if capture else None
+            commit_failed = False
+            if capture_ctx:
+                report.captures = run_captures(capture_ctx, say)
             items = queue.pending(limit if limit is not None else settings.run.max_items, settings.run.max_attempts)
             if skip:
                 skipped = [i for i in items if skip(i)]
@@ -263,6 +265,14 @@ def run(
                     # Files are written and still pending; the next run retries the commit.
                     log.error("auto commit failed: %s", e)
                     report.commit_message = f"commit failed (will retry next run): {e}"
+                    commit_failed = True
+            if capture_ctx and not commit_failed:
+                # After the commit, so "Done!" means it is in the vault. Only runs that
+                # capture: a --no-capture/--dry-run run must not message the chat.
+                from .capture import telegram
+
+                if replies := telegram.notify_done(capture_ctx):
+                    say(f"telegram: {replies} done repl{'y' if replies == 1 else 'ies'} sent")
             queue.finish_run(
                 run_id,
                 captured=sum(c.enqueued for c in report.captures),

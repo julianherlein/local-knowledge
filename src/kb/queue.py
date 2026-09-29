@@ -248,6 +248,15 @@ class Queue:
         ).fetchall()
         return [Item.from_row(r) for r in rows]
 
+    def position(self, item_id: int) -> int:
+        """1-based place of an unfinished item in the processing order of `pending()`
+        (unfinished steps by id; retryable failures come after all of them)."""
+        marks = ",".join("?" * 5)
+        return self.conn.execute(
+            f"SELECT COUNT(*) FROM items WHERE status IN ({marks}) AND id <= ?",
+            (*STEPS[:5], item_id),
+        ).fetchone()[0]
+
     def update(self, item_id: int, **fields: Any) -> None:
         if "domains" in fields and fields["domains"] is not None:
             fields["domains"] = json.dumps(fields["domains"])

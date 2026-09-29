@@ -56,7 +56,7 @@ notes and bookmarks are preconfigured in `.obsidian/`.
 6. Put that id in `~/.kb/config.toml`: `allowed_chat_ids = [123456789]` under `[telegram]`.
    Nothing is consumed until then, so the message from step 4 is captured by the next `kb run`.
 
-Send links with optional hashtags to force a domain: `https://… #de`. The bot replies `✓ queued (1)`.
+Send links with optional hashtags to force a domain: `https://… #de`. The bot replies with the link's place in the queue, `✓ queued (#3 in queue)`, and once the link is processed it replies to the same message again with `✓ Done! <title> (<domain>)`, or `✗ Failed: <title> (<reason>)` when it gave up (a later `kb retry` that succeeds gets its own `✓ Done!`). Sending a link that is still waiting answers `✓ already queued (#N in queue)` and that message gets the Done reply too. Done replies go out from `kb run` after the vault commit (not `--no-capture` or `--dry-run`; the next capturing run sends them).
 Results show up in the digest, not in the chat.
 
 > Telegram keeps undelivered messages for about **24 hours**. Run `kb run` at least daily;

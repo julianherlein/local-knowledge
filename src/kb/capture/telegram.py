@@ -21,6 +21,15 @@ arrives. Cost: nothing when messages are waiting, up to `POLL_TIMEOUT_S` when th
 none. Later batches of the same run use `timeout=0`, since the server is awake by then.
 The first poll logs its wall time, which is the evidence for tuning `POLL_TIMEOUT_S`.
 
+Feedback in the chat: the capture reply says where each link sits in the queue
+("✓ queued (#3 in queue)"), and once every item of a message is finished,
+`notify_done` replies to that message again with "✓ Done!" or "✗ Failed". State
+`telegram.awaiting_done` maps each message to its items and the status last reported
+for each. Items are dropped only after their reply went out (a crash re-sends a Done,
+never loses one). A reported failure stays tracked, so a `kb retry` that later succeeds
+gets its own "✓ Done!". Entries expire after `AWAIT_DAYS`. It runs only in runs that
+capture, after the vault commit, so `--dry-run` (a DB copy) never messages you.
+
 Raw httpx calls, no bot framework. The token lives in the request URL, so every error
 string is scrubbed before it reaches a log line or a report.
 
@@ -37,12 +46,13 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 
 from ..normalize import TELEGRAM_SCHEME, URL_RE, InvalidURL, extract_hashtags, extract_urls, normalize
-from ..queue import now_iso
+from ..queue import now_iso, parse_iso
 from . import CaptureContext, CaptureReport
 
 log = logging.getLogger("kb.capture.telegram")
@@ -52,6 +62,7 @@ SOURCE = "telegram"
 OFFSET_KEY = "telegram.offset"
 LAST_POLL_KEY = "telegram.last_poll_at"
 SEEN_CHATS_KEY = "telegram.seen_chats"
+AWAITING_KEY = "telegram.awaiting_done"
 
 BATCH_LIMIT = 100  # Bot API maximum for getUpdates
 MAX_BATCHES = 50  # safety cap per run (5000 updates); the next run continues
@@ -140,7 +151,7 @@ def _get_updates(ctx: CaptureContext, offset: int | None, timeout: int = POLL_TI
     return [u for u in (result or []) if isinstance(u, dict) and isinstance(u.get("update_id"), int)]
 
 
-def _reply(ctx: CaptureContext, msg: dict[str, Any], text: str) -> None:
+def _reply(ctx: CaptureContext, msg: dict[str, Any], text: str, raise_errors: bool = False) -> None:
     """Best effort: a failed reply is logged and never blocks the offset or the run."""
     try:
         _call(
@@ -151,6 +162,8 @@ def _reply(ctx: CaptureContext, msg: dict[str, Any], text: str) -> None:
             reply_parameters={"message_id": msg["message_id"], "allow_sending_without_reply": True},
         )
     except TelegramError as e:
+        if raise_errors:
+            raise
         log.warning("telegram reply failed: %s", explain(e))
 
 
@@ -283,14 +296,51 @@ def chat_label(chat: dict[str, Any]) -> str:
     return f"{chat.get('id')} {label}".strip()
 
 
-def reply_text(queued: int, duplicates: int) -> str:
-    if queued and duplicates:
-        return f"✓ queued ({queued}), {duplicates} already saved"
-    if queued:
-        return f"✓ queued ({queued})"
+def _places(positions: list[int]) -> str:
+    return ", ".join(f"#{p}" for p in positions) + " in queue"
+
+
+def reply_text(positions: list[int], duplicates: int, waiting: list[int] | None = None) -> str:
+    """Capture reply. `positions`: queue places of items this message queued; `waiting`:
+    places of links sent before and not processed yet; `duplicates`: already processed."""
+    parts = []
+    if positions:
+        count = f" {len(positions)}" if len(positions) > 1 else ""
+        parts.append(f"queued{count} ({_places(positions)})")
+    if waiting:
+        parts.append(f"already queued ({_places(waiting)})")
     if duplicates:
-        return "✓ already saved"
-    return NO_URL
+        parts.append(f"{duplicates} already saved" if parts else "already saved")
+    return "✓ " + ", ".join(parts) if parts else NO_URL
+
+
+DONE_STATUSES = ("done", "failed_permanent")
+ERROR_CHARS = 200
+MAX_REPLY_CHARS = 4000  # Telegram rejects messages over 4096 characters
+AWAIT_DAYS = 30  # stop tracking a message after this; also bounds the state size
+
+
+def done_text(items: list[Any]) -> str:
+    """Reply for a message whose items are all finished: one line per item, capped so
+    Telegram never rejects it as too long."""
+    lines = []
+    for it in items:
+        name = it.title or it.canonical_url
+        if it.status == "done":
+            lines.append(f"✓ Done! {name}" + (f" ({', '.join(it.domains)})" if it.domains else ""))
+        else:
+            why = _WS.sub(" ", it.error_reason or it.last_error or "unknown error").strip()
+            if len(why) > ERROR_CHARS:
+                why = why[: ERROR_CHARS - 1] + "…"
+            lines.append(f"✗ Failed: {name} ({why})")
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        more = f"… and {len(lines) - i} more"
+        if len("\n".join([*out, line])) + len(more) + 1 > MAX_REPLY_CHARS:
+            out.append(more)
+            break
+        out.append(line)
+    return "\n".join(out)
 
 
 # Seen chats (for setup) ------------------------------------------------------------------
@@ -308,6 +358,29 @@ def _seen_chats(ctx: CaptureContext, updates: list[dict[str, Any]]) -> dict[str,
             seen[str(chat["id"])] = chat_label(chat)
     ctx.queue.set_state(SEEN_CHATS_KEY, json.dumps(seen, ensure_ascii=False))
     return seen
+
+
+def _awaiting(ctx: CaptureContext) -> dict[str, dict[str, Any]]:
+    """State `telegram.awaiting_done`:
+    {"<chat_id>:<message_id>": {"since": iso, "items": {"<item_id>": last reported status or null}}}"""
+    try:
+        data = json.loads(ctx.queue.get_state(AWAITING_KEY) or "{}")
+    except ValueError:
+        log.warning("ignoring unparseable %s", AWAITING_KEY)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and isinstance(v.get("items"), dict)}
+
+
+def _await_done(ctx: CaptureContext, msg: dict[str, Any], item_ids: list[int]) -> None:
+    if not item_ids:
+        return
+    data = _awaiting(ctx)
+    entry = data.setdefault(f"{msg['chat']['id']}:{msg.get('message_id')}", {"since": now_iso(), "items": {}})
+    for i in item_ids:
+        entry["items"].setdefault(str(i), None)
+    ctx.queue.set_state(AWAITING_KEY, json.dumps(data))
 
 
 def _stored_offset(ctx: CaptureContext) -> int | None:
@@ -422,31 +495,99 @@ def _handle(
     if command(msg) in ("start", "help") and not parsed.urls:
         return msg, USAGE
 
-    queued = dups = 0
+    results = []
     if parsed.urls:
         for url in parsed.urls:
-            res = ctx.queue.enqueue(url, origin=SOURCE, hint_tags=parsed.hashtags, note=parsed.note)
-            if res.status == "queued":
-                queued += 1
-            elif res.status == "duplicate":
-                dups += 1
+            results.append(ctx.queue.enqueue(url, origin=SOURCE, hint_tags=parsed.hashtags, note=parsed.note))
     else:
         forwarded, source = forward_source(msg)
         if forwarded and parsed.text.strip():
-            res = ctx.queue.enqueue(
-                f"{TELEGRAM_SCHEME}{chat_id}/{msg.get('message_id')}",
-                origin=SOURCE,
-                hint_tags=parsed.hashtags,
-                note=f"forwarded from {source}" if source else "forwarded message",
-                inline_text=parsed.text.strip(),
+            results.append(
+                ctx.queue.enqueue(
+                    f"{TELEGRAM_SCHEME}{chat_id}/{msg.get('message_id')}",
+                    origin=SOURCE,
+                    hint_tags=parsed.hashtags,
+                    note=f"forwarded from {source}" if source else "forwarded message",
+                    inline_text=parsed.text.strip(),
+                )
             )
-            queued, dups = int(res.status == "queued"), int(res.status == "duplicate")
+    new_ids = [r.item_id for r in results if r.status == "queued" and r.item_id is not None]
+    # A link sent again before it was processed is still on its way: track it for this
+    # message too, and say where it is instead of "already saved".
+    waiting_ids = []
+    for r in results:
+        if r.status == "duplicate" and r.item_id is not None:
+            it = ctx.queue.get(r.item_id)
+            if it is not None and it.status not in DONE_STATUSES:
+                waiting_ids.append(r.item_id)
+    _await_done(ctx, msg, new_ids + waiting_ids)
+    queued, dups = len(new_ids), sum(r.status == "duplicate" for r in results)
     report.enqueued += queued
     report.duplicates += dups
     log.info("telegram: update %s -> %d queued, %d duplicate", update["update_id"], queued, dups)
     if not parsed.text and msg.get("media_group_id") and not (queued or dups):
         return None  # the other photos of an album: only the captioned one gets a reply
-    return msg, reply_text(queued, dups)
+    return msg, reply_text(
+        [ctx.queue.position(i) for i in new_ids],
+        dups - len(waiting_ids),
+        [ctx.queue.position(i) for i in waiting_ids],
+    )
+
+
+def notify_done(ctx: CaptureContext) -> int:
+    """Reply "✓ Done!" / "✗ Failed" to each Telegram message whose items are all finished.
+
+    Best effort, never raises. Returns the number of replies sent. A message with an item
+    still pending (or waiting for a retry) is left for a later run. Only items whose
+    status changed since the last reply are listed. A network error, 429 or 5xx stops
+    this pass and keeps everything for the next run; other API errors (bot blocked, chat
+    gone) drop the message, so one dead chat cannot make every run retry forever.
+    """
+    s = ctx.settings
+    if not (s.telegram.enabled and s.telegram_bot_token):
+        return 0
+    try:
+        return _notify_done(ctx)
+    except Exception as e:
+        log.error("telegram: done replies failed: %s", _scrub(f"{type(e).__name__}: {e}", s.telegram_bot_token))
+        return 0
+
+
+def _notify_done(ctx: CaptureContext) -> int:
+    data = _awaiting(ctx)
+    cutoff = datetime.now(UTC) - timedelta(days=AWAIT_DAYS)
+    sent = 0
+    for key in list(data):
+        entry = data[key]
+        since = parse_iso(entry.get("since"))
+        if since is None or since < cutoff:
+            del data[key]  # stuck (e.g. max_attempts lowered) or corrupt: stop tracking
+            ctx.queue.set_state(AWAITING_KEY, json.dumps(data))
+            continue
+        reported: dict[str, Any] = entry["items"]
+        live = {i: it for i in reported if (it := ctx.queue.get(int(i))) is not None}
+        if any(it.status not in DONE_STATUSES for it in live.values()):
+            continue
+        changed = [it for i, it in sorted(live.items(), key=lambda kv: kv[1].id) if reported[i] != it.status]
+        if changed:
+            chat_id, _, message_id = key.partition(":")
+            msg = {"chat": {"id": int(chat_id)}, "message_id": int(message_id)}
+            try:
+                _reply(ctx, msg, done_text(changed), raise_errors=True)
+                sent += 1
+            except TelegramError as e:
+                log.warning("telegram: done reply failed: %s", explain(e))
+                if e.code is None or e.code == 429 or e.code >= 500:
+                    break  # transient: keep everything, the next run retries
+                live = {}  # permanent (bot blocked, chat gone): forget this message
+        # Keep reported failures (a `kb retry` may still succeed); drop the rest.
+        entry["items"] = {i: it.status for i, it in live.items() if it.status != "done"}
+        if not entry["items"]:
+            del data[key]
+        ctx.queue.set_state(AWAITING_KEY, json.dumps(data))
+    if sent:
+        log.info("telegram: sent %d done repl%s", sent, "y" if sent == 1 else "ies")
+    return sent
 
 
 def check(ctx: CaptureContext) -> list[str]:
