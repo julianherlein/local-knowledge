@@ -256,3 +256,36 @@ def test_run_refreshes_todays_digest_in_same_commit(settings, queue, fake_llm, p
     note = vault_dir / "digests" / "daily" / f"{_date.today().isoformat()}.md"
     assert rep.committed and note.exists()
     assert git(vault_dir, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("capture", [True, False])
+def test_done_replies_only_in_capturing_runs(settings, queue, fake_llm, patched_fetch, monkeypatch, capture):
+    # --dry-run and --no-capture work on state that must not message the chat.
+    from kb.capture import telegram
+
+    calls = []
+    monkeypatch.setattr(pipeline, "run_captures", lambda ctx, say: [])
+    monkeypatch.setattr(telegram, "notify_done", lambda ctx: calls.append(ctx) or 1)
+    queue.enqueue("https://example.com/w", "cli")
+    said = []
+    pipeline.run(settings, queue=queue, llm=fake_llm, capture=capture, progress=said.append)
+    assert len(calls) == int(capture)
+    assert ("telegram: 1 done reply sent" in said) is capture
+
+
+def test_no_done_replies_when_the_commit_failed(settings, queue, fake_llm, patched_fetch, monkeypatch):
+    # "Done!" means it is in the vault; a failed commit waits for the next run.
+    from kb.capture import telegram
+    from kb.git_ops import GitError, Tracker
+
+    calls = []
+    monkeypatch.setattr(pipeline, "run_captures", lambda ctx, say: [])
+    monkeypatch.setattr(telegram, "notify_done", lambda ctx: calls.append(ctx) or 0)
+
+    def boom(self):
+        raise GitError("index.lock exists")
+
+    monkeypatch.setattr(Tracker, "commit", boom)
+    queue.enqueue("https://example.com/w", "cli")
+    pipeline.run(settings, queue=queue, llm=fake_llm, capture=True)
+    assert calls == []

@@ -156,13 +156,57 @@ def test_plain_url(ctx, router):
     [item] = ctx.queue.all_items()
     assert item.canonical_url == "https://example.com/post/1"
     assert item.origin == "telegram" and item.note is None and item.hint_tags == []
-    assert bot.replies == ["✓ queued (1)"]
+    assert bot.replies == ["✓ queued (#1 in queue)"]
     assert bot.sent[0]["chat_id"] == ME_ID
     assert bot.sent[0]["reply_parameters"]["message_id"] == 10
     first = bot.get_updates_params[0]
-    assert first["timeout"] == 0 and first["limit"] == 100 and first["allowed_updates"] == ["message"]
+    assert first["timeout"] == tg.POLL_TIMEOUT_S and first["limit"] == 100 and first["allowed_updates"] == ["message"]
     assert offset(ctx) == "101"
     assert ctx.queue.get_state(tg.LAST_POLL_KEY)
+
+
+class ColdBot(Bot):
+    """A Bot API server that just woke up after the bot sat idle: the first call with
+    `timeout=0` answers empty although messages are waiting; a long poll gets them.
+    Seen live on 2026-09-29: `kb run` reported 0 new from Telegram, and the next run
+    three minutes later picked up both messages.
+    """
+
+    warm = False
+
+    def _get_updates(self, request: httpx.Request) -> httpx.Response:
+        if not self.warm and json.loads(request.content).get("timeout", 0) == 0:
+            self.get_updates_params.append(json.loads(request.content))
+            return ok([])
+        self.warm = True
+        return super()._get_updates(request)
+
+
+def test_cold_buffer_is_drained_on_the_first_run(ctx, router):
+    bot = ColdBot(router, [upd(100, m("plain_url")), upd(101, m("multi"))])
+    rep = tg.poll(ctx)
+    assert (rep.enqueued, rep.errors) == (3, [])
+    assert offset(ctx) == "102"
+    assert bot.get_updates_params[0]["timeout"] == tg.POLL_TIMEOUT_S
+
+
+def test_only_the_first_poll_of_a_run_waits(ctx, router):
+    # A long poll on the final, empty call would add POLL_TIMEOUT_S to every run.
+    bot = Bot(router, [upd(100, m("plain_url"))], [upd(101, m("multi"))])
+    assert tg.poll(ctx).enqueued == 3
+    assert [p["timeout"] for p in bot.get_updates_params] == [tg.POLL_TIMEOUT_S, 0, 0]
+
+
+def test_cold_buffer_is_seen_by_setup_peek_and_doctor(ctx, router):
+    allow(ctx, [])
+    ColdBot(router, [upd(500, m("plain_url"))], [upd(500, m("plain_url"))])
+    assert "chats seen" in tg.poll(ctx).message
+    assert f"chat {ME_ID} @julian (not in allowed_chat_ids)" in tg.check(ctx)
+
+
+def test_http_timeout_outlives_the_long_poll():
+    # Otherwise an idle long poll surfaces as a network error on every run.
+    assert tg.REQUEST_TIMEOUT_S >= tg.POLL_TIMEOUT_S + 10
 
 
 def test_multiple_urls_hashtags_and_note(ctx, router):
@@ -177,7 +221,7 @@ def test_multiple_urls_hashtags_and_note(ctx, router):
     for i in items:
         assert i.hint_tags == ["de", "ai"]
         assert i.note == "Worth reading later and"
-    assert bot.replies == ["✓ queued (2)"]
+    assert bot.replies == ["✓ queued 2 (#1, #2 in queue)"]
 
 
 def test_text_link_entity(ctx, router):
@@ -222,7 +266,7 @@ def test_album_replies_once(ctx, router):
     bot = Bot(router, [upd(100, first), upd(101, second)])
     rep = tg.poll(ctx)
     assert rep.enqueued == 1 and rep.seen == 2
-    assert bot.replies == ["✓ queued (1)"]
+    assert bot.replies == ["✓ queued (#1 in queue)"]
     assert offset(ctx) == "102"
 
 
@@ -235,15 +279,17 @@ def test_utf16_helpers():
 
 
 def test_duplicate_replies(ctx, router):
-    ctx.queue.enqueue("https://blog.example.com/airflow", origin="cli")
+    done = ctx.queue.enqueue("https://blog.example.com/airflow", origin="cli").item_id
+    ctx.queue.advance(done, "done")
+    ctx.queue.enqueue("https://example.com/post/1", origin="telegram")  # sent before, not processed yet
     one_dup = m("multi")
     all_dup = m("plain_url")
     all_dup["message_id"] = 30
-    ctx.queue.enqueue("https://example.com/post/1", origin="telegram")
     bot = Bot(router, [upd(100, one_dup), upd(101, all_dup)])
     rep = tg.poll(ctx)
     assert (rep.enqueued, rep.duplicates) == (1, 2)
-    assert bot.replies == ["✓ queued (1), 1 already saved", "✓ already saved"]
+    # Item 2 is still waiting, so the new link is second in line.
+    assert bot.replies == ["✓ queued (#2 in queue), 1 already saved", "✓ already queued (#1 in queue)"]
 
 
 def test_forwarded_without_url_becomes_inline_item(ctx, router):
@@ -413,14 +459,19 @@ def test_check_no_chats_and_errors(ctx, router):
 @pytest.mark.parametrize(
     ("q", "d", "text"),
     [
-        (2, 0, "✓ queued (2)"),
-        (1, 1, "✓ queued (1), 1 already saved"),
-        (0, 3, "✓ already saved"),
-        (0, 0, "✗ no URL found"),
+        ([4, 5], 0, "✓ queued 2 (#4, #5 in queue)"),
+        ([7], 1, "✓ queued (#7 in queue), 1 already saved"),
+        ([], 3, "✓ already saved"),
+        ([], 0, "✗ no URL found"),
     ],
 )
 def test_reply_text(q, d, text):
     assert tg.reply_text(q, d) == text
+
+
+def test_reply_text_waiting():
+    assert tg.reply_text([], 0, [2]) == "✓ already queued (#2 in queue)"
+    assert tg.reply_text([5], 1, [2]) == "✓ queued (#5 in queue), already queued (#2 in queue), 1 already saved"
 
 
 def test_command_parsing():
@@ -482,3 +533,173 @@ def test_404_explains_a_malformed_token():
     """Re-judge L8: Telegram answers 404 for a token with stray spaces or quotes."""
     msg = tg.explain(tg.TelegramError(404, "Not Found"))
     assert "TELEGRAM_BOT_TOKEN" in msg and "spaces or quotes" in msg
+
+
+# Queue position and done replies ----------------------------------------------------------
+def finish(ctx, item_id: int, title: str, domains: list[str]) -> None:
+    ctx.queue.advance(item_id, "done", title=title, domains=domains)
+
+
+def tracked(ctx) -> dict[str, dict]:
+    """{"chat:message": {item_id: last reported status}} from the adapter's state."""
+    raw = json.loads(ctx.queue.get_state(tg.AWAITING_KEY) or "{}")
+    return {k: v["items"] for k, v in raw.items()}
+
+
+def test_queue_position_skips_finished_and_failed_items(ctx):
+    q = ctx.queue
+    a = q.enqueue("https://example.com/a", origin="cli").item_id
+    b = q.enqueue("https://example.com/b", origin="cli").item_id
+    c = q.enqueue("https://example.com/c", origin="cli").item_id
+    q.advance(a, "done")
+    q.fail(b, "boom", permanent=False, reason=None, max_attempts=3)  # retried after all others
+    d = q.enqueue("https://example.com/d", origin="cli").item_id
+    assert (q.position(c), q.position(d)) == (1, 2)
+
+
+def test_done_reply_after_processing(ctx, router):
+    bot = Bot(router, [upd(100, m("plain_url"))])
+    tg.poll(ctx)
+    [item] = ctx.queue.all_items()
+    assert tg.notify_done(ctx) == 0  # still queued: nothing to say yet
+    finish(ctx, item.id, "Post one", ["ai-llms"])
+    assert tg.notify_done(ctx) == 1
+    assert bot.replies[-1] == "✓ Done! Post one (ai-llms)"
+    assert bot.sent[-1]["reply_parameters"]["message_id"] == 10 and bot.sent[-1]["chat_id"] == ME_ID
+    assert "parse_mode" not in bot.sent[-1]  # titles are plain text, never markup
+    assert tg.notify_done(ctx) == 0 and len(bot.sent) == 2  # sent once, then forgotten
+    assert tracked(ctx) == {}
+
+
+def test_multi_link_message_waits_for_every_item(ctx, router):
+    bot = Bot(router, [upd(100, m("multi"))])
+    tg.poll(ctx)
+    first, second = ctx.queue.all_items()
+    finish(ctx, first.id, "Airflow", ["data-engineering"])
+    assert tg.notify_done(ctx) == 0
+    ctx.queue.fail(second.id, "HTTP 404", permanent=True, reason="not_found", max_attempts=3)
+    assert tg.notify_done(ctx) == 1
+    assert bot.replies[-1] == (
+        "✓ Done! Airflow (data-engineering)\n✗ Failed: https://youtube.com/watch?v=dQw4w9WgXcQ (not_found)"
+    )
+
+
+def test_retry_after_failed_reply_sends_done(ctx, router):
+    bot = Bot(router, [upd(100, m("multi"))])
+    tg.poll(ctx)
+    first, second = ctx.queue.all_items()
+    finish(ctx, first.id, "Airflow", [])
+    ctx.queue.fail(second.id, "HTTP 503", permanent=True, reason="unavailable", max_attempts=3)
+    assert tg.notify_done(ctx) == 1
+    assert tracked(ctx) == {f"{ME_ID}:11": {str(second.id): "failed_permanent"}}  # kept for a retry
+    assert tg.notify_done(ctx) == 0  # nothing changed, nothing re-sent
+    ctx.queue.retry(second.id)
+    assert tg.notify_done(ctx) == 0  # pending again
+    finish(ctx, second.id, "Never gonna", ["music"])
+    assert tg.notify_done(ctx) == 1
+    assert bot.replies[-1] == "✓ Done! Never gonna (music)"  # only what changed
+    assert tracked(ctx) == {}
+
+
+def test_retryable_failure_waits_for_the_retry(ctx, router):
+    Bot(router, [upd(100, m("plain_url"))])
+    tg.poll(ctx)
+    [item] = ctx.queue.all_items()
+    ctx.queue.fail(item.id, "timeout", permanent=False, reason=None, max_attempts=3)
+    assert tg.notify_done(ctx) == 0
+
+
+def test_processed_duplicates_and_notes_are_not_tracked(ctx, router):
+    done = ctx.queue.enqueue("https://example.com/post/1", origin="cli").item_id
+    ctx.queue.advance(done, "done")
+    note = m("plain_url")
+    note["text"], note["entities"], note["message_id"] = "just a thought", [], 12
+    Bot(router, [upd(100, m("plain_url")), upd(101, note)])
+    tg.poll(ctx)
+    assert tracked(ctx) == {}
+
+
+def test_pending_duplicate_gets_done_on_both_messages(ctx, router):
+    again = m("plain_url")
+    again["message_id"] = 40
+    bot = Bot(router, [upd(100, m("plain_url"))], [upd(101, again)])
+    tg.poll(ctx)
+    tg.poll(ctx)
+    [item] = ctx.queue.all_items()
+    assert bot.replies == ["✓ queued (#1 in queue)", "✓ already queued (#1 in queue)"]
+    finish(ctx, item.id, "Post one", [])
+    assert tg.notify_done(ctx) == 2
+    assert sorted(s["reply_parameters"]["message_id"] for s in bot.sent[2:]) == [10, 40]
+
+
+@pytest.mark.parametrize(("code", "kept"), [(429, True), (502, True), (403, False), (400, False)])
+def test_done_reply_errors(ctx, router, code, kept):
+    Bot(router, [upd(100, m("plain_url"))])
+    tg.poll(ctx)
+    [item] = ctx.queue.all_items()
+    finish(ctx, item.id, "Post one", [])
+    router.post(f"{BASE}/sendMessage").mock(return_value=err(code, "nope"))
+    assert tg.notify_done(ctx) == 0
+    assert bool(tracked(ctx)) is kept
+
+
+def test_transient_error_stops_the_pass(ctx, router):
+    # With the network down, one timeout per waiting message would hold the run lock for minutes.
+    second = m("plain_url")
+    second["message_id"], second["text"] = 41, "https://example.com/post/2"
+    second["entities"] = [{"type": "url", "offset": 0, "length": len(second["text"])}]
+    Bot(router, [upd(100, m("plain_url")), upd(101, second)])
+    tg.poll(ctx)
+    for it in ctx.queue.all_items():
+        finish(ctx, it.id, "t", [])
+    send = router.post(f"{BASE}/sendMessage").mock(side_effect=httpx.ConnectError("down"))
+    before = send.call_count  # the route also counts the two capture replies
+    assert tg.notify_done(ctx) == 0
+    assert send.call_count - before == 1 and len(tracked(ctx)) == 2
+
+
+def test_long_reply_is_capped_below_telegram_limit(ctx):
+    class It:
+        def __init__(self, i):
+            self.id, self.title, self.canonical_url, self.domains = i, None, "https://e.com/" + "p" * 300, []
+            self.status, self.error_reason, self.last_error = "failed_permanent", "not_found", None
+
+    text = tg.done_text([It(i) for i in range(40)])
+    assert len(text) <= tg.MAX_REPLY_CHARS
+    assert text.splitlines()[-1].startswith("… and ") and text.splitlines()[-1].endswith(" more")
+    assert tg.done_text([It(1)]).count("\n") == 0  # a short one is untouched
+
+
+def test_stale_entries_expire(ctx, router):
+    Bot(router, [upd(100, m("plain_url"))])
+    tg.poll(ctx)
+    raw = json.loads(ctx.queue.get_state(tg.AWAITING_KEY))
+    for v in raw.values():
+        v["since"] = "2020-01-01T00:00:00+00:00"
+    ctx.queue.set_state(tg.AWAITING_KEY, json.dumps(raw))
+    assert tg.notify_done(ctx) == 0 and tracked(ctx) == {}
+
+
+def test_done_reply_skipped_when_telegram_off_and_never_raises(ctx, router):
+    ctx.queue.set_state(tg.AWAITING_KEY, "not json")
+    assert tg.notify_done(ctx) == 0  # unparseable state is ignored, not fatal
+    ctx.settings = ctx.settings.model_copy(update={"telegram_bot_token": None})
+    ctx.queue.set_state(tg.AWAITING_KEY, json.dumps({f"{ME_ID}:10": {"since": "x", "items": {"1": None}}}))
+    assert tg.notify_done(ctx) == 0 and not router.calls
+
+
+def test_removed_item_is_forgotten_silently(ctx, router):
+    bot = Bot(router)
+    ctx.queue.set_state(tg.AWAITING_KEY, json.dumps({f"{ME_ID}:10": {"since": tg.now_iso(), "items": {"999": None}}}))
+    assert tg.notify_done(ctx) == 0 and bot.sent == []
+    assert tracked(ctx) == {}
+
+
+def test_failure_reason_is_one_short_line():
+    class It:
+        id, title, canonical_url, status, domains = 1, None, "https://e.com/x", "failed_permanent", []
+        error_reason, last_error = None, "line one\n" + "x" * 500
+
+    [line] = tg.done_text([It()]).splitlines()
+    assert line.startswith("✗ Failed: https://e.com/x (line one xxx") and line.endswith("…)")
+    assert len(line) < 260
