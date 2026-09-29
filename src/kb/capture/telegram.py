@@ -11,6 +11,16 @@ so the offset is the only thing that can lose messages. Two rules follow:
 * Until `telegram.allowed_chat_ids` is configured, the adapter only peeks (it never
   sends a higher offset), so the first message sent while setting up is not lost.
 
+The first `getUpdates` of a run is a short long poll (`POLL_TIMEOUT_S`), not `timeout=0`.
+Seen live: after the bot sat idle for two days, a `timeout=0` poll returned nothing while
+two messages were waiting, and the next run three minutes later got both (same offset,
+nothing lost). Our reading of the Bot API server source is that it answers from a local
+buffer filled asynchronously, so an instant answer can come before the backlog lands;
+that is an inference, not documented behavior. A long poll returns as soon as an update
+arrives. Cost: nothing when messages are waiting, up to `POLL_TIMEOUT_S` when there are
+none. Later batches of the same run use `timeout=0`, since the server is awake by then.
+The first poll logs its wall time, which is the evidence for tuning `POLL_TIMEOUT_S`.
+
 Raw httpx calls, no bot framework. The token lives in the request URL, so every error
 string is scrubbed before it reaches a log line or a report.
 
@@ -25,6 +35,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,7 +55,8 @@ SEEN_CHATS_KEY = "telegram.seen_chats"
 
 BATCH_LIMIT = 100  # Bot API maximum for getUpdates
 MAX_BATCHES = 50  # safety cap per run (5000 updates); the next run continues
-REQUEST_TIMEOUT_S = 20.0
+POLL_TIMEOUT_S = 5  # long-poll wait of the first getUpdates per run; see the module docstring
+REQUEST_TIMEOUT_S = 20.0  # HTTP timeout; must stay well above POLL_TIMEOUT_S
 
 USAGE = (
     "Send me a link and I will save it to your knowledge base.\n"
@@ -101,8 +113,9 @@ def explain(err: TelegramError) -> str:
         return "bad TELEGRAM_BOT_TOKEN (401 Unauthorized): copy the token from @BotFather into ~/.kb/.env"
     if err.code == 409:
         return (
-            "409 Conflict: a webhook is set for this bot (call deleteWebhook) "
-            f"or another getUpdates poller is using the same token ({err.description})"
+            "409 Conflict: another getUpdates poller is using the same token (a `kb doctor` "
+            "or `kb run` running at the same time, or another program), or a webhook is set "
+            f"for this bot (call deleteWebhook) ({err.description})"
         )
     if err.code == 429:
         wait = f"retry after {err.retry_after}s" if err.retry_after is not None else "retry later"
@@ -119,8 +132,8 @@ def explain(err: TelegramError) -> str:
     return f"Telegram API error {err.code}: {err.description}"
 
 
-def _get_updates(ctx: CaptureContext, offset: int | None) -> list[dict[str, Any]]:
-    params: dict[str, Any] = {"timeout": 0, "limit": BATCH_LIMIT, "allowed_updates": ["message"]}
+def _get_updates(ctx: CaptureContext, offset: int | None, timeout: int = POLL_TIMEOUT_S) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"timeout": timeout, "limit": BATCH_LIMIT, "allowed_updates": ["message"]}
     if offset is not None:
         params["offset"] = offset
     result = _call(ctx, "getUpdates", **params)
@@ -349,8 +362,11 @@ def _peek_for_setup(ctx: CaptureContext, report: CaptureReport) -> CaptureReport
 
 def _drain(ctx: CaptureContext, allowed: set[int], report: CaptureReport) -> None:
     offset = _stored_offset(ctx)
-    for _ in range(MAX_BATCHES):
-        updates = _get_updates(ctx, offset)
+    for batch in range(MAX_BATCHES):
+        started = time.monotonic()
+        updates = _get_updates(ctx, offset, POLL_TIMEOUT_S if batch == 0 else 0)
+        if batch == 0:
+            log.info("telegram: first poll got %d update(s) in %.1fs", len(updates), time.monotonic() - started)
         if not updates:
             return
         progressed = False

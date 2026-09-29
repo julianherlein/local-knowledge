@@ -160,9 +160,53 @@ def test_plain_url(ctx, router):
     assert bot.sent[0]["chat_id"] == ME_ID
     assert bot.sent[0]["reply_parameters"]["message_id"] == 10
     first = bot.get_updates_params[0]
-    assert first["timeout"] == 0 and first["limit"] == 100 and first["allowed_updates"] == ["message"]
+    assert first["timeout"] == tg.POLL_TIMEOUT_S and first["limit"] == 100 and first["allowed_updates"] == ["message"]
     assert offset(ctx) == "101"
     assert ctx.queue.get_state(tg.LAST_POLL_KEY)
+
+
+class ColdBot(Bot):
+    """A Bot API server that just woke up after the bot sat idle: the first call with
+    `timeout=0` answers empty although messages are waiting; a long poll gets them.
+    Seen live on 2026-09-29: `kb run` reported 0 new from Telegram, and the next run
+    three minutes later picked up both messages.
+    """
+
+    warm = False
+
+    def _get_updates(self, request: httpx.Request) -> httpx.Response:
+        if not self.warm and json.loads(request.content).get("timeout", 0) == 0:
+            self.get_updates_params.append(json.loads(request.content))
+            return ok([])
+        self.warm = True
+        return super()._get_updates(request)
+
+
+def test_cold_buffer_is_drained_on_the_first_run(ctx, router):
+    bot = ColdBot(router, [upd(100, m("plain_url")), upd(101, m("multi"))])
+    rep = tg.poll(ctx)
+    assert (rep.enqueued, rep.errors) == (3, [])
+    assert offset(ctx) == "102"
+    assert bot.get_updates_params[0]["timeout"] == tg.POLL_TIMEOUT_S
+
+
+def test_only_the_first_poll_of_a_run_waits(ctx, router):
+    # A long poll on the final, empty call would add POLL_TIMEOUT_S to every run.
+    bot = Bot(router, [upd(100, m("plain_url"))], [upd(101, m("multi"))])
+    assert tg.poll(ctx).enqueued == 3
+    assert [p["timeout"] for p in bot.get_updates_params] == [tg.POLL_TIMEOUT_S, 0, 0]
+
+
+def test_cold_buffer_is_seen_by_setup_peek_and_doctor(ctx, router):
+    allow(ctx, [])
+    ColdBot(router, [upd(500, m("plain_url"))], [upd(500, m("plain_url"))])
+    assert "chats seen" in tg.poll(ctx).message
+    assert f"chat {ME_ID} @julian (not in allowed_chat_ids)" in tg.check(ctx)
+
+
+def test_http_timeout_outlives_the_long_poll():
+    # Otherwise an idle long poll surfaces as a network error on every run.
+    assert tg.REQUEST_TIMEOUT_S >= tg.POLL_TIMEOUT_S + 10
 
 
 def test_multiple_urls_hashtags_and_note(ctx, router):
