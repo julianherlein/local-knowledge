@@ -38,6 +38,17 @@ NON_SPEECH_TRACKS = {"live_chat", "rechat"}
 
 UPGRADE_HINT = "YouTube may have broken yt-dlp: run `uv lock --upgrade-package yt-dlp && uv sync`"
 
+# Checked before _UNAVAILABLE: YouTube words its rate limit as "Video unavailable. This
+# content isn't available, try again later", and one rate-limit window must not turn a
+# whole backfill of videos into failed_permanent.
+_RATE_LIMITED = re.compile(
+    # No bare "429": video ids like "abcdefg-429" appear in yt-dlp messages.
+    r"try again later|rate[- ]?limit|too many requests|\bhttp error 429\b",
+    re.IGNORECASE,
+)
+_NOT_YET = re.compile(r"live event will begin|premieres? in|premiere will begin|is_upcoming", re.IGNORECASE)
+# Live, upcoming or just-ended streams get their final captions later: retry, never give up.
+NOT_YET_LIVE_STATUS = {"is_live", "is_upcoming", "post_live"}
 # yt-dlp error texts that mean the video will not become fetchable by retrying.
 # "Sign in to confirm you're not a bot" is deliberately absent: that one is transient.
 _UNAVAILABLE = re.compile(
@@ -195,6 +206,10 @@ def extract_info(url: str) -> dict[str, Any]:
         "noprogress": True,
         "noplaylist": True,
         "skip_download": True,
+        # Metadata and subtitles only: a video whose formats yt-dlp cannot select (DRM,
+        # PO-token gated streams) must not fail the whole extraction.
+        "ignore_no_formats_error": True,
+        "check_formats": False,
         # Manual subtitles machine-translated into every language are pure noise here.
         "extractor_args": {"youtube": {"skip": ["translated_subs"]}},
     }
@@ -209,6 +224,10 @@ def _info(url: str) -> dict[str, Any]:
         info = extract_info(url)
     except DownloadError as e:
         msg = str(e).removeprefix("ERROR: ")
+        if _RATE_LIMITED.search(msg):
+            raise FetchError(f"rate-limited by YouTube, retry later: {msg}", reason="ytdlp_rate_limited") from e
+        if _NOT_YET.search(msg):
+            raise FetchError(f"video not available yet: {msg}", reason="not_yet_available") from e
         if _UNAVAILABLE.search(msg):
             raise FetchError(f"video unavailable: {msg}", permanent=True, reason="video_unavailable") from e
         raise FetchError(f"yt-dlp failed: {msg}. {UPGRADE_HINT}", reason="ytdlp_error") from e
@@ -239,6 +258,11 @@ def _download_vtt(http: httpx.Client, url: str, timeout: float) -> str:
 def fetch(item: Item, ctx) -> FetchedItem:
     settings = ctx.settings
     info = _info(item.canonical_url)
+    if info.get("live_status") in NOT_YET_LIVE_STATUS:
+        raise FetchError(
+            f"stream is {info['live_status']}: captions are not final yet, will retry",
+            reason="not_yet_available",
+        )
 
     choice = choose_subtitles(info, settings.youtube.sub_langs)
     if choice is None:

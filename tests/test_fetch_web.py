@@ -222,7 +222,7 @@ def test_short_or_empty_extraction_is_permanent_extraction_empty(ctx, respx_mock
     assert "paywall" in str(ei.value)
 
 
-def test_redirect_to_login_page_is_extraction_empty(ctx, respx_mock):
+def test_redirect_to_login_page_is_login_wall(ctx, respx_mock):
     login = "https://datanotes.example.com/login?next=/posts/airflow-to-dagster"
     respx_mock.get(URL).mock(return_value=httpx.Response(302, headers={"location": login}))
     respx_mock.get(login).mock(
@@ -230,7 +230,7 @@ def test_redirect_to_login_page_is_extraction_empty(ctx, respx_mock):
     )
     with pytest.raises(FetchError) as ei:
         web.fetch(make_item(), ctx)
-    assert ei.value.reason == "extraction_empty"
+    assert (ei.value.permanent, ei.value.reason) == (True, "login_wall")
     assert "login" in str(ei.value)
 
 

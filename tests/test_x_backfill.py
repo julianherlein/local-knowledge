@@ -189,12 +189,16 @@ def test_backfill_fetch_via_api_uses_the_api(queue, http, settings, monkeypatch)
 
 
 @respx.mock
-def test_corrupt_inline_record_falls_back_to_the_api(queue, http, settings, monkeypatch):
+def test_corrupt_inline_record_never_calls_the_api(queue, http, settings, monkeypatch):
+    """X critic M3: a corrupt export record must not trigger a token refresh (dry runs!)."""
     install_keyring(monkeypatch)
     s = x_settings(settings)
     res = queue.enqueue("https://x.com/i/status/123456789012", "backfill", inline_text="{broken")
-    respx.get(f"{API}/tweets/123456789012").mock(return_value=httpx.Response(200, json=load("tweet_not_found.json")))
+    route = respx.get(f"{API}/tweets/123456789012").mock(
+        return_value=httpx.Response(200, json=load("tweet_not_found.json"))
+    )
     authorize_queue(s, queue)
     with pytest.raises(FetchError) as exc:
         xf.fetch(queue.get(res.item_id), FetchContext(s, http, queue), now=NOW)
-    assert exc.value.reason == "x_not_found"
+    assert (exc.value.permanent, exc.value.reason) == (True, "backfill_record_invalid")
+    assert not route.called

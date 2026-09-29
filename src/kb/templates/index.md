@@ -6,7 +6,7 @@ updated: {{TODAY}}
 ---
 # Knowledge base
 
-**Stats:** 0 sources (0 uncompiled) | 0 concepts | 0 entities | 0 syntheses | last compile: never
+**Stats:** 0 sources (0 unchecked in queue, incl. unsorted) | 0 concepts | 0 entities | 0 syntheses | last compile: never
 
 ## Domains
 

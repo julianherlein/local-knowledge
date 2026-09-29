@@ -209,10 +209,25 @@ Claims grouped by theme, each cited. Link the concept and entity pages you build
 ### 4.5 Property rules for every page you write
 
 - `type` is one of `concept`, `entity`, `synthesis`, `hub`.
-- `domains` lists only domains that have a hub in `wiki/domains/`. Never `unsorted`.
+- `domains` is derived from the page's sources, never chosen by taste:
+  1. Take every source in `sources` that **substantively discusses** the page's subject (a claim
+     on the page cites it for more than a passing mention).
+  2. The page's domains are the union of those sources' `domains` (from each source summary's
+     front matter, both primary and secondary), minus `unsorted`, limited to domains that have a
+     top-level hub in `wiki/domains/`.
+  3. Order: by the number of such sources carrying the domain, descending; ties keep the order in
+     which the domains were first added to the page (for a new page: the order they appear in its
+     first source's `domains`).
+  4. Re-evaluate `domains` (and therefore `tags` and the hub catalogs) every time you add a source
+     to the page. A domain is removed only when no substantive source carries it any more.
+  Worked example: a page cites A `[data-engineering]`, B `[system-design, data-engineering]`,
+  C `[system-design]` (passing mention only). Substantive: A, B. Counts: data-engineering 2,
+  system-design 1, so `domains: [data-engineering, system-design]`.
 - `tags` = the type tag, then exactly the `domains` values, in the same order. No other tags
   unless the user asks (the graph colors and Bases views depend on this).
-- `sources` lists every source page cited in the body, as quoted wikilinks, oldest first.
+- `sources` lists every source page cited in the body, as quoted wikilinks, oldest first: sorted by
+  the `YYYY-MM-DD` prefix of the source's file name (its capture date), ties by file name. The
+  `## Sources` section uses the same order.
 - `aliases` holds other names people use: acronyms (`CDC`), expansions, alternate spellings,
   former names. Use `[]` when there are none.
 - Dates are `YYYY-MM-DD`, unquoted.
@@ -274,21 +289,44 @@ Structure (keep the headings exactly):
 
 - `## Overview`: one or two paragraphs on what this domain covers here and its main threads.
   Rewrite it when the domain's shape changes, not on every compile.
-- `## Key concepts`: the 5 to 10 most important pages, one line each, most central first.
-- `## Catalog`: every concept, entity and synthesis page whose `domains` include this domain, one
-  line each, alphabetical by file name inside `### Concepts`, `### Entities`, `### Syntheses`.
-  Line format, exactly: `- [[wiki/concepts/idempotency]]: at most 15 words on what the page covers`
-- `## Sub-hubs`: present only after a split.
-- `## Live views`: Obsidian Bases embeds. Never edit or remove.
+- `## Key concepts`: the 5 to 10 most important pages, most central first (most citing sources,
+  then most links from other pages). With fewer than 5 pages in the domain, list all of them.
+  Line format, exactly:
+  `- [[wiki/concepts/idempotency]]: at most 15 words on why it matters in this domain`
+- **Placeholders.** A new hub holds italic placeholder lines (`_Not written yet..._`,
+  `_None yet..._`). Whichever session first adds a page to the hub replaces them, even when it
+  is compiling another domain and only reached this hub through a page's secondary domain:
+  write a one- or two-sentence Overview from what the wiki holds so far, list the pages in Key
+  concepts, and delete the placeholder lines. Later sessions grow them under the rules above.
+- `## Catalog`: every concept, entity and synthesis page whose `domains` include this domain and
+  that is **not listed in one of this hub's sub-hubs**, one line each, alphabetical by file name
+  inside `### Concepts`, `### Entities`, `### Syntheses`. Line format, exactly:
+  `- [[wiki/concepts/idempotency]]: at most 15 words on what the page covers`
+- `## Sub-hubs`: present only after a split, placed between `## Catalog` and `## Live views`. One
+  line per sub-hub, alphabetical: `- [[wiki/domains/<domain>/<subtopic>]]: what it covers (N pages)`.
+- `## Live views`: Obsidian Bases embeds under `### Live: ...` headings. Never edit or remove.
 
 A page with two domains is listed in both hubs. That is the point of a single vault.
 
-**Split rule.** Count catalog lines with `grep -c '^- \[\[wiki/' wiki/domains/<domain>.md` (this
-also counts Key concepts lines, which is fine as an estimate). Past about 150 entries, propose a
-split to the user: group the entries into 3 to 8 subtopics of 20 to 80 pages, create
-`wiki/domains/<domain>/<subtopic>.md` for each (hub template below, plus
-`parent: "[[wiki/domains/<domain>]]"`), move the entries there, and replace them in the parent's
-catalog with one line per sub-hub: `- [[wiki/domains/<domain>/<subtopic>]]: description (N pages)`.
+**Where a page's catalog line goes.** For each domain in the page's `domains`: if that hub has
+sub-hubs and one sub-hub's subtopic fits the page, the line goes in that sub-hub's catalog (and
+its `(N pages)` count in the parent is updated); otherwise it goes in the hub's own `## Catalog`.
+A page is listed exactly once per domain. Its `domains` always name the top-level domain
+(`data-engineering`), never a sub-hub.
+
+**Split rule.** Count a hub's catalog lines with
+`grep -c '^- \[\[wiki/\(concepts\|entities\|syntheses\)/' wiki/domains/<domain>.md` (this includes
+Key concepts lines, which is fine as an estimate). Past about 150, propose a split to the user:
+
+1. Group the catalog entries into 3 to 8 subtopics of 20 to 80 pages each.
+2. Create `wiki/domains/<domain>/<subtopic>.md` for each: sub-hub front matter below, then
+   `# <Subtopic title>`, one overview sentence, and a `## Catalog` with the same three `###`
+   groups and line format.
+3. Move the entries: delete them from the parent's `## Catalog`, add them to the sub-hub's.
+   Entries that fit no subtopic stay in the parent's `## Catalog`.
+4. Add the parent's `## Sub-hubs` section with one line per sub-hub.
+5. Key concepts stay on the parent hub.
+
 Split only after the user agrees, and log it as `hub-split`.
 
 Sub-hub front matter:
@@ -319,7 +357,10 @@ updated: 2026-11-01
   ```
 
   and rewrite the line, keeping this exact format:
-  `**Stats:** 42 sources (7 uncompiled) | 18 concepts | 11 entities | 2 syntheses | last compile: 2026-10-05`
+  `**Stats:** 42 sources (7 unchecked in queue, incl. unsorted) | 18 concepts | 11 entities | 2 syntheses | last compile: 2026-10-05`
+- `last compile` is the date (`date +%F`) of the latest session that compiled at least one source
+  (section 11.1). Other sessions leave it unchanged.
+- Set the index's `updated` property to today whenever you change the domain list or the stats line.
 
 ## 10. The log
 
@@ -357,9 +398,11 @@ procedure. Every procedure starts with the preflight in section 12.
 
 > Process unchecked items in `wiki/_compile-queue.md` tagged `#<domain>`.
 
-1. List the work: `grep -nE '^- \[ \] .* #<domain>( |$)' wiki/_compile-queue.md` (the trailing
-   `( |$)` keeps `#data` from matching `#data-engineering`). The first hashtag on a line is the
-   source's primary domain; a line matches if either tag is `#<domain>`.
+1. List the work: `grep -nE '^- \[ \] \[\[[^]]+\]\]( #[a-z0-9-]+)* #<domain>( |$)' wiki/_compile-queue.md`.
+   The pattern only looks at the run of hashtags right after the link, so a `#word` inside the
+   TL;DR never matches, and the trailing `( |$)` keeps `#data` from matching `#data-engineering`.
+   The first hashtag on a line is the source's primary domain; a line matches if either tag is
+   `#<domain>`.
    Work oldest first (file order), at most 10 sources per session; tell the user how many remain.
 2. Read `wiki/index.md` and the hub of `<domain>` (plus the hub of any secondary domain you touch).
 3. For each source:
@@ -367,15 +410,19 @@ procedure. Every procedure starts with the preflight in section 12.
    2. For each candidate concept and entity, and anything else central to the source: search for an
       existing page (section 6), then update it or create it from the template (section 4). Weave
       the new claims into the right sections with citations; do not append a "from source X" block.
-   3. Add the source to the page's `sources` list and `## Sources` section, and set `updated`.
+   3. Add the source to the page's `sources` list and `## Sources` section (date order, section
+      4.5), re-derive the page's `domains` and `tags` from its sources (section 4.5), and set
+      `updated`.
    4. If the source adds nothing new (already covered, or too thin), compile it anyway and say so
       in the log details.
-4. Update the hubs: add catalog lines for new pages in **every** hub listed in the page's
-   `domains`; revise Key concepts or Overview if the domain's shape changed; set the hub's `updated`.
+4. Update the hubs: for every created page, and every page whose `domains` changed in step 3,
+   make the catalogs match its `domains`: add a line in each hub (or fitting sub-hub, section 8)
+   of a domain it now has, remove it from hubs of a domain it lost. Revise Key concepts or
+   Overview if the domain's shape changed; set `updated` on every hub you edited.
 5. Close each source: tick its queue line (`- [ ]` to `- [x]`, the rest of the line unchanged;
    never delete or reorder lines) and set `status: compiled` plus `compiled: <date>` in its summary.
    A source with two domains is compiled once and ticked once, and its pages are linked from both hubs.
-6. Update the index stats line (section 9).
+6. Update the index stats line, with `last compile` = today (section 9).
 7. Append the log line: `op = compile`, `scope = <domain>`.
 8. Finish with section 12: diff review, then `git commit -m "compile: <domain> <YYYY-MM-DD>"`.
 
@@ -391,9 +438,10 @@ queue line carries the new hashtag and the item is compiled with its domain.
 2. For each concept and entity page in one domain but not the other, grep the other domain's
    source summaries (`grep -lE '^domains: \[(.*, )?<domain-b>(,|\])' wiki/sources/*.md`, then search
    those for the page's name and aliases).
-3. A page gains a domain only when at least one source of that domain substantively discusses it
-   (not a passing mention). Then: add the domain to `domains` and `tags`, cite the new source,
-   add the catalog line to the second hub, set `updated`.
+3. A page gains a domain only through the rule in section 4.5: cite a source of that domain that
+   substantively discusses the page's subject (not a passing mention), then re-derive `domains`
+   and `tags` from the sources (which also fixes their order), add the catalog line to the second
+   hub (or fitting sub-hub), and set `updated`.
 4. Add `## Related` links between pages of the two domains that describe the same mechanism,
    with one line on how they relate.
 5. Report what you linked and why, log `op = cross-domain`, `scope = <domain-a>+<domain-b>`,
@@ -455,15 +503,32 @@ in `aliases` and updates every link to the page (grep for `[[wiki/concepts/<old-
 
 **Preflight (start of every session):**
 
-1. `git status --porcelain`. If anything is modified or untracked, list it and ask the user how to
-   proceed. Do not stash, commit, discard or "clean up" changes you did not make; they may be the
-   user's edits or engine writes waiting for the engine's own commit.
-2. `git log --oneline -5` to see the latest engine (`auto:`) and session (`compile:`) commits.
+1. Snapshot the tree before you touch anything, and show it:
+   `git status --porcelain --untracked-files=all > "${TMPDIR:-/tmp}/kb-preflight.txt"`
+2. Classify what it lists:
+   - Under `digests/`, `notes/` or `.obsidian/`: expected. The user writes in daily notes and in
+     their own notes, and Obsidian rewrites its config; the engine deliberately never auto-commits
+     those edits. Mention them once and carry on. Never stage, commit, stash or discard them, and
+     never open them for writing.
+   - Anywhere else (`wiki/`, `raw/`, root files): someone has uncommitted work where you are about
+     to write. List it and ask the user whether to continue. Do not stash, commit, discard or
+     "clean up" changes you did not make.
+3. `git log --oneline -5` to see the latest engine (`auto:`) and session (`compile:`) commits.
 
 **End of session:**
 
-1. Guard: `git status --porcelain -- raw digests notes .obsidian` must print nothing. If it
-   shows a file you changed, restore it (`git checkout -- <path>`) and tell the user you broke a rule.
+1. Guard: no new changes under the protected folders. Run
+   `git status --porcelain --untracked-files=all -- raw digests notes .obsidian | grep -vxFf "${TMPDIR:-/tmp}/kb-preflight.txt"`
+   Every line it prints is a protected path that changed during the session. Sort each one by
+   who changed it, using your own record of the files you wrote (not the path's location):
+   - **You wrote it** (a tracked file you edited): restore it with `git checkout -- <path>`.
+   - **You created it** (shown as `??`, and you created it this session): delete it with
+     `rm -- <path>` (checkout cannot restore a file that never existed).
+   - **You did not touch it**: the user (a daily-note edit in Obsidian) or the engine (a `kb run`
+     in another terminal) changed it while you worked. Leave it exactly as it is: never check
+     out, delete, stage or commit it. Just list it for the user.
+   If you are not certain you wrote a file, treat it as not yours. Tell the user about any file
+   you restored or deleted: that means you broke the protected-folders rule.
 2. Show `git diff --stat` and a short summary of every created and changed page. Wait for the
    user's approval. Apply requested changes, then show the diff again.
 3. Stage exactly the files you changed, by path (`git add -- <path> <path> ...`). Never
@@ -480,7 +545,7 @@ in `aliases` and updates every link to the page (grep for `[[wiki/concepts/<old-
 
 ## 13. End-of-session checklist
 
-- [ ] No file under `raw/`, `digests/`, `notes/`, `.obsidian/` changed.
+- [ ] No new changes under `raw/`, `digests/`, `notes/`, `.obsidian/` compared with the preflight snapshot.
 - [ ] Every new or changed claim cites a `wiki/sources/` page, verified against raw.
 - [ ] Every link is a full vault path; no bare basenames.
 - [ ] New pages: template followed, `tags` = type tag + `domains`, listed in every matching hub.

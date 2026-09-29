@@ -62,7 +62,10 @@ def _detail(resp: httpx.Response) -> str:
         parts = [str(body.get(k)) for k in ("title", "detail", "error", "error_description") if body.get(k)]
         if not parts and isinstance(body.get("errors"), list) and body["errors"]:
             e = body["errors"][0]
-            parts = [str(e.get("message") or e.get("detail") or e.get("title") or e)]
+            if isinstance(e, dict):
+                parts = [str(e.get("message") or e.get("detail") or e.get("title") or e)]
+            else:
+                parts = [str(e)]
         return ": ".join(parts)[:300]
     return str(body)[:200]
 

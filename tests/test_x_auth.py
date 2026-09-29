@@ -137,10 +137,11 @@ def test_authorize_full_flow_stores_tokens_and_user(settings, queue, keyring):
 
 
 @respx.mock
-def test_authorize_rejects_state_mismatch(settings, queue, keyring):
+def test_authorize_ignores_wrong_state_requests(settings, queue, keyring):
+    """X critic L2: a forged callback must not kill the flow; it is ignored until the deadline."""
     s = x_settings(settings, redirect_uri=f"http://127.0.0.1:{_free_port()}/callback")
     token_route = respx.post(TOKEN).mock(return_value=httpx.Response(200, json=load("token.json")))
-    with pytest.raises(x_auth.XAuthError, match="state mismatch"):
+    with pytest.raises(x_auth.XAuthError, match="wrong state were ignored"):
         _run_authorize(s, queue, callback=lambda q: {"state": "forged", "code": "AUTH-CODE"})
     assert not token_route.called
     assert x_auth.load_refresh_token(s, queue) is None
@@ -275,16 +276,27 @@ def test_refresh_without_any_token_says_not_authorized(xs, queue, http):
 
 
 # Storage ------------------------------------------------------------------------------
-def test_broken_keyring_falls_back_to_state_and_remembers(settings, queue, monkeypatch):
-    fake = install_keyring(monkeypatch, broken=True)
+def test_broken_keyring_falls_back_to_state(settings, queue, monkeypatch):
+    install_keyring(monkeypatch, broken=True)
     s = x_settings(settings)
     assert x_auth.save_refresh_token(s, queue, "R1") == "state"
     assert queue.get_state("x.refresh_token") == "R1"
-    assert queue.get_state("x.token_store") == "state"
-    calls = fake.calls
     assert x_auth.load_refresh_token(s, queue) == "R1"
     assert x_auth.save_refresh_token(s, queue, "R2") == "state"
-    assert fake.calls == calls  # the broken backend is not retried on every call
+    assert x_auth.load_refresh_token(s, queue) == "R2"
+
+
+def test_one_failed_keyring_read_does_not_lock_the_user_out(settings, queue, monkeypatch):
+    """X critic H1: a transient keyring failure used to flip the store to an empty state table."""
+    fake = install_keyring(monkeypatch)
+    s = x_settings(settings)
+    assert x_auth.save_refresh_token(s, queue, "GOOD") == "keyring"
+    fake.broken = True
+    with pytest.raises(x_auth.KeyringUnavailable):  # e.g. a locked keychain during one run
+        x_auth.load_refresh_token(s, queue)
+    fake.broken = False
+    assert x_auth.load_refresh_token(s, queue) == "GOOD"
+    assert x_auth.is_authorized(s, queue)
 
 
 def test_keyring_failing_on_read_falls_back(settings, queue, monkeypatch):

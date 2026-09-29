@@ -20,9 +20,10 @@ _None yet. Compile sessions list the 5 to 10 most important pages here, one line
 
 ## Catalog
 
-Every concept, entity and synthesis page whose `domains` include `{{DOMAIN}}`, one line each,
-alphabetical by file name. Format: `- [[wiki/concepts/<name>]]: what the page covers`. Past about
-150 entries this hub is split into sub-hubs (see `CLAUDE.md`, section 8).
+Every concept, entity and synthesis page whose `domains` include `{{DOMAIN}}` and that is not
+listed in a sub-hub, one line each, alphabetical by file name. Format:
+`- [[wiki/concepts/<name>]]: what the page covers`. Past about 150 entries this hub is split into
+sub-hubs, listed in a `## Sub-hubs` section added after this one (see `CLAUDE.md`, section 8).
 
 ### Concepts
 
@@ -35,18 +36,18 @@ alphabetical by file name. Format: `- [[wiki/concepts/<name>]]: what the page co
 Obsidian Bases tables from [[wiki/_bases/{{DOMAIN}}.base]]. They update themselves; compile
 sessions never edit this section.
 
-### Concepts & entities
+### Live: concepts & entities
 
 ![[wiki/_bases/{{DOMAIN}}.base#Concepts & entities]]
 
-### Uncompiled sources
+### Live: uncompiled sources
 
 ![[wiki/_bases/{{DOMAIN}}.base#Uncompiled sources]]
 
-### Syntheses
+### Live: syntheses
 
 ![[wiki/_bases/{{DOMAIN}}.base#Syntheses]]
 
-### Recent sources
+### Live: recent sources
 
 ![[wiki/_bases/{{DOMAIN}}.base#Recent sources]]

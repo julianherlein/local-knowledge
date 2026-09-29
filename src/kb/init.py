@@ -69,7 +69,8 @@ DOMAIN_TITLES = {
     "system-design": "System design",
     "tennis": "Tennis",
 }
-GRAPH_SEARCH = "-path:raw -path:digests -path:wiki/domains"
+# The compile queue links every source, so it would be a giant hub node in the graph.
+GRAPH_SEARCH = "-path:raw -path:digests -path:wiki/domains -file:_compile-queue"
 
 # A domain becomes an Obsidian tag, a file name and a string inside .base expressions, so it
 # must be kebab-case: no spaces, quotes or slashes, and not purely numeric (not a valid tag).

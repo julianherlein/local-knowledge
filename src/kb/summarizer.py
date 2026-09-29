@@ -12,7 +12,7 @@ from kb_llm import LLMClient, LLMRequest
 from .config import Settings
 from .models import SummaryResult
 from .queue import Queue
-from .textutil import head_tail
+from .textutil import head_tail, neutralize_hashtags
 
 SYSTEM = """You write the source-summary page for one item in a personal knowledge base.
 Return JSON only, matching the schema. Rules, all mandatory:
@@ -93,7 +93,9 @@ def _bullets(items: list[str], empty: str = "- none") -> str:
 def render_body(s: SummaryResult) -> str:
     concepts = ", ".join(" ".join(c.split()) for c in s.concepts) or "none"
     entities = ", ".join(" ".join(e.split()) for e in s.entities) or "none"
-    return (
+    # Model text lands in wiki/, where tags drive Bases views and graph colors: escape
+    # inline hashtags so a summary line mentioning "#tennis" cannot tag the page.
+    return neutralize_hashtags(
         f"# {' '.join(s.title.split())}\n\n"
         f"**TL;DR:** {' '.join(s.tldr.split())}\n\n"
         f"## Key points\n{_bullets(s.key_points)}\n\n"

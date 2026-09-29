@@ -28,6 +28,7 @@ from .git_ops import GitError, Tracker, sha256_bytes
 from .models import FetchedItem, FetchError, TagResult
 from .obs import run_lock
 from .queue import FAILED, Item, Queue, parse_iso
+from .textutil import neutralize_hashtags
 from .vault import COMPILE_QUEUE, Vault
 
 log = logging.getLogger("kb.pipeline")
@@ -154,7 +155,7 @@ class Pipeline:
             item.id,
             "summarized",
             summary_path=summary_rel,
-            tldr=" ".join(summary.tldr.split()),
+            tldr=neutralize_hashtags(" ".join(summary.tldr.split())),  # reused in queue lines and digests
             title=" ".join(summary.title.split()) or item.title,
         )
 

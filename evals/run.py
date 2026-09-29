@@ -2,8 +2,9 @@
 
 Paid lane (real `claude -p` calls). Run before shipping a prompt or model change:
 
-    uv run python -m evals.run                 # configured model
-    uv run python -m evals.run --model claude-haiku-4-5-20251001
+    uv run python -m evals.run                 # Haiku (default for all testing)
+    uv run python -m evals.run --model claude-opus-5-5      # before switching production to it
+    uv run python -m evals.run --configured    # whatever llm.model in config.toml says
     uv run python -m evals.run --only classify
 
 Graders are deterministic: primary-domain accuracy (threshold 85%), off-topic items
@@ -33,6 +34,8 @@ from kb.tagger import UNSORTED, tag
 
 from .cases import CLASSIFY, SUMMARY, ClassifyCase, SummaryCase
 
+# Testing runs on Haiku to spare quota; production uses llm.model from config.toml.
+TEST_MODEL = "claude-haiku-4-5-20251001"
 CLASSIFY_THRESHOLD = 0.85
 SUMMARY_THRESHOLD = 1.0  # every summary case must pass every check
 RESULTS = Path(__file__).parent / "results"
@@ -118,13 +121,14 @@ def run_summary(settings, client, case: SummaryCase) -> dict[str, object]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--model", help="override llm.model")
+    ap.add_argument("--model", help=f"model to evaluate (default {TEST_MODEL})")
+    ap.add_argument("--configured", action="store_true", help="evaluate the llm.model from config.toml")
     ap.add_argument("--only", choices=["classify", "summary"])
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args(argv)
 
     settings = load_settings()
-    model = args.model or settings.llm.model
+    model = args.model or (settings.llm.model if args.configured else TEST_MODEL)
     client = ClaudeCodeClient(model, binary=settings.llm.binary)
     report: dict[str, object] = {"model": model, "at": datetime.now().astimezone().isoformat(timespec="seconds")}
     ok = True

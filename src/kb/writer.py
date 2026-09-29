@@ -10,7 +10,7 @@ from . import fm
 from .models import FetchedItem, SummaryResult, TagResult
 from .queue import Item, parse_iso
 from .summarizer import render_body
-from .textutil import one_line
+from .textutil import neutralize_hashtags, one_line
 from .vault import COMPILE_QUEUE, RAW_DIRS, SOURCES_DIR
 
 COMPILE_QUEUE_HEADER = """---
@@ -61,26 +61,6 @@ def raw_meta(item: Item, fetched: FetchedItem, tagged: TagResult) -> dict[str, A
         meta["note"] = item.note
     meta["tags"] = ["raw", *domain_tags(tagged.domains)]
     return {k: v for k, v in meta.items() if v is not None}
-
-
-# A `#word` in body text is a real tag to Obsidian: a tweet saying "#tennis" would put the raw
-# file under the tennis tag and graph color. Escaped as `\#word`, which renders as plain "#word".
-# Not after a word char, '&' (HTML entity), '/' or '=' (URLs), '\' (already escaped), '#', '[' or '('.
-_INLINE_TAG = re.compile(r"(?<![\w&/=\\#\[(])#(?=[^\W\d_])")
-_FENCED = re.compile(r"(^(?:```|~~~)[^\n]*\n.*?^(?:```|~~~)[ \t]*$)", re.MULTILINE | re.DOTALL)
-_INLINE_CODE = re.compile(r"(`[^`\n]*`)")
-
-
-def neutralize_hashtags(body: str) -> str:
-    """Escape inline hashtags outside fenced and inline code. Headings (`# x`) are untouched."""
-    out = []
-    for i, block in enumerate(_FENCED.split(body)):
-        if i % 2:  # fenced code block, kept verbatim
-            out.append(block)
-            continue
-        parts = _INLINE_CODE.split(block)
-        out.append("".join(p if j % 2 else _INLINE_TAG.sub(r"\\#", p) for j, p in enumerate(parts)))
-    return "".join(out)
 
 
 def render_raw(item: Item, fetched: FetchedItem, tagged: TagResult) -> str:

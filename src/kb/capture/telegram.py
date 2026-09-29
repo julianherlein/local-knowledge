@@ -107,6 +107,13 @@ def explain(err: TelegramError) -> str:
     if err.code == 429:
         wait = f"retry after {err.retry_after}s" if err.retry_after is not None else "retry later"
         return f"rate limited by Telegram (429), {wait}"
+    if err.code == 404:
+        # Telegram answers 404 for a token that is not even shaped right (stray space,
+        # quotes, a missing part), before it gets to 401.
+        return (
+            "bad TELEGRAM_BOT_TOKEN (404 Not Found): check ~/.kb/.env for stray spaces or quotes "
+            "around the token; it looks like 123456:ABC-..."
+        )
     if err.code is None:
         return f"network error talking to Telegram: {err.description}"
     return f"Telegram API error {err.code}: {err.description}"

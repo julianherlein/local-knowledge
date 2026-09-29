@@ -374,3 +374,17 @@ def test_commit_message_and_only_digest_paths(settings, queue, monkeypatch, vaul
     it.done(TODAY, "Saturday night", ["tennis"], hour=21)
     digest.run(settings, queue, day=TODAY)
     assert git(vault_dir, "log", "-1", "--format=%s").strip() == "auto: digest 2026-09-26"
+
+    # The user writes in today's note in Obsidian (uncommitted). The next digest still rewrites
+    # the note (keeping their text) but the Tracker leaves it out of the commit, so the message
+    # must not claim it (critic finding M2). A note for another day is committed normally.
+    note = vault_dir / "digests/daily/2026-09-26.md"
+    note.write_text(note.read_text(encoding="utf-8") + "\nmy evening thoughts\n", encoding="utf-8")
+    it.done(TODAY, "Even later", ["tennis"], hour=22)
+    it.done(date(2026, 9, 25), "Friday", ["software"])
+    written = digest.run(settings, queue, day=date(2026, 9, 25))
+    assert git(vault_dir, "log", "-1", "--format=%s").strip() == "auto: digest 2026-09-25"
+    digest.run(settings, queue, day=TODAY)  # only the user-edited note changes: no commit at all
+    assert git(vault_dir, "log", "-1", "--format=%s").strip() == "auto: digest 2026-09-25"
+    assert "my evening thoughts" in note.read_text(encoding="utf-8")
+    assert " M digests/daily/2026-09-26.md" in git(vault_dir, "status", "--porcelain")

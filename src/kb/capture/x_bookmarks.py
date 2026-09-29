@@ -6,8 +6,14 @@ Stop conditions, in order:
 1. the watermark `x.last_bookmark_id` (the newest bookmark already enqueued). The
    list is ordered by *bookmark* time, not post id, so the check is equality, never
    `id <= watermark`;
-2. a whole page whose ids are all in the DB already. This covers a watermark that
-   was un-bookmarked since the last run (we would never see it again);
+2. the first post already in the DB *as a bookmark* (origin `x_bookmark` or `backfill`).
+   The list is in bookmark order, so everything below it was bookmarked earlier and is
+   either captured or older than what the engine tracks (history comes only from
+   `kb backfill-x`). This covers a watermark that was un-bookmarked since the last run
+   (the read-later pattern): without it the walk would continue into never-enqueued
+   history and import, and pay for, up to ~800 old posts. Items that entered the DB
+   another way (Telegram, CLI) do not count: bookmarking posts you had already sent
+   from your phone must not end the walk above the genuinely new bookmarks below;
 3. `x.max_bookmark_pages` pages (40 x 20 = the API's ~800 bookmark cap);
 4. no `next_token`.
 
@@ -23,7 +29,7 @@ fields or expansions; the post fetcher reads full content later, once per item.
 
 from __future__ import annotations
 
-from ..queue import now_iso
+from ..queue import Queue, now_iso
 from . import CaptureContext, CaptureReport, x_auth
 from .x_api import RateLimited, XApiError, XClient
 
@@ -37,6 +43,21 @@ def status_url(post_id: str) -> str:
     return f"https://x.com/i/status/{post_id}"
 
 
+BOOKMARK_ORIGINS = ("x_bookmark", "backfill")
+
+
+def known_bookmarks(q: Queue, ids: list[str]) -> set[str]:
+    """The ids already in the DB with a bookmark origin (see stop condition 2)."""
+    if not ids:
+        return set()
+    urls = [status_url(i) for i in ids]
+    rows = q.conn.execute(
+        f"SELECT canonical_url FROM items WHERE origin IN (?, ?) AND canonical_url IN ({','.join('?' * len(urls))})",
+        (*BOOKMARK_ORIGINS, *urls),
+    ).fetchall()
+    return {r["canonical_url"].rsplit("/", 1)[-1] for r in rows}
+
+
 def _skip(message: str) -> CaptureReport:
     return CaptureReport(source=SOURCE, skipped=True, message=message)
 
@@ -45,7 +66,8 @@ def _user_id(ctx: CaptureContext, client: XClient) -> str:
     uid = ctx.queue.get_state(x_auth.USER_ID_KEY)
     if uid:
         return uid
-    data = client.get("/users/me").get("data") or {}
+    data = client.get("/users/me").get("data")
+    data = data if isinstance(data, dict) else {}
     if not data.get("id"):
         raise XApiError("/2/users/me returned no user id")
     x_auth.remember_user(ctx.queue, str(data["id"]), str(data.get("username") or ""))
@@ -81,26 +103,27 @@ def poll(ctx: CaptureContext) -> CaptureReport:
                 params["pagination_token"] = token
             page = client.get(f"/users/{uid}/bookmarks", params)
             pages += 1
-            ids = [str(t["id"]) for t in page.get("data") or [] if isinstance(t, dict) and t.get("id")]
+            rows = page.get("data") if isinstance(page.get("data"), list) else []
+            ids = [str(t["id"]) for t in rows if isinstance(t, dict) and isinstance(t.get("id"), str | int)]
             rep.seen += len(ids)
             if newest is None and ids:
                 newest = ids[0]
-            hit = False
+            known = known_bookmarks(q, ids) if trust_known_pages else set()
             for pid in ids:
                 if pid == watermark:
-                    hit = True
+                    stop_reason = "watermark"
+                    break
+                if pid in known:
+                    stop_reason = "known_bookmark"
                     break
                 new_ids.append(pid)
-            if hit:
-                stop_reason = "watermark"
+            if stop_reason:
                 break
             if first_run:
                 stop_reason = "first_run"
                 break
-            if trust_known_pages and ids and q.known_x_ids(ids) == set(ids):
-                stop_reason = "known_page"
-                break
-            token = (page.get("meta") or {}).get("next_token")
+            meta = page.get("meta") if isinstance(page.get("meta"), dict) else {}
+            token = meta.get("next_token") if isinstance(meta.get("next_token"), str) else None
             if not token:
                 stop_reason = "end"
                 break

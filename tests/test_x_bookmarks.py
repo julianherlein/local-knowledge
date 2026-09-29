@@ -132,17 +132,18 @@ def test_watermark_on_page_two(ctx, queue):
 
 
 @respx.mock
-def test_unbookmarked_watermark_stops_on_a_fully_known_page(ctx, queue):
-    queue.set_state("x.last_bookmark_id", "1")  # no longer bookmarked: never seen again
+def test_known_page_newer_than_watermark_keeps_walking(ctx, queue):
+    """X critic M4: posts already captured via Telegram/CLI must not hide older new bookmarks."""
+    queue.set_state("x.last_bookmark_id", "1")
     enqueue(queue, "8", "7")
     route = respx.get(BOOKMARKS).mock(
         side_effect=serve({None: (["10", "9"], "t2"), "t2": (["8", "7"], "t3"), "t3": (["6", "5"], None)})
     )
     rep = x_bookmarks.poll(ctx)
-    assert route.call_count == 2  # page t3 is never requested
-    assert ids_in_queue(queue) == ["8", "7", "9", "10"]
+    assert route.call_count == 3
+    assert set(ids_in_queue(queue)) == {"10", "9", "8", "7", "6", "5"}
     assert queue.get_state("x.last_bookmark_id") == "10"
-    assert rep.enqueued == 2 and rep.duplicates == 2
+    assert rep.enqueued == 4 and rep.duplicates == 2
 
 
 @respx.mock
@@ -249,3 +250,28 @@ def test_missing_user_id_is_fetched_and_cached(ctx, queue):
     x_bookmarks.poll(ctx)
     assert me.call_count == 1
     assert queue.get_state("x.user_id") == "2244994945"
+
+
+@respx.mock
+def test_unbookmarked_watermark_does_not_import_history(ctx, queue):
+    """X re-judge NEW-H2: the read-later pattern (un-bookmark the newest) must not walk into
+    never-enqueued history and bill ~800 posts."""
+    history = [str(i) for i in range(300, 0, -1)]  # newest first
+    pages = {None: (history[:20], "p1")}
+    for n, start in enumerate(range(20, 300, 20), 1):
+        pages[f"p{n}"] = (history[start : start + 20], f"p{n + 1}" if start + 20 < 300 else None)
+    respx.get(BOOKMARKS).mock(side_effect=serve(pages))
+    x_bookmarks.poll(ctx)  # first run: page 1 only
+    assert len(ids_in_queue(queue)) == 20 and queue.get_state("x.last_bookmark_id") == "300"
+
+    # The user reads and un-bookmarks "300", then bookmarks something new.
+    after = ["999"] + history[1:]
+    pages2 = {None: (after[:20], "p1")}
+    for n, start in enumerate(range(20, 300, 20), 1):
+        pages2[f"p{n}"] = (after[start : start + 20], f"p{n + 1}" if start + 20 < 300 else None)
+    route = respx.get(BOOKMARKS).mock(side_effect=serve(pages2))
+    before = route.call_count  # same route object as the first run: counts accumulate
+    rep = x_bookmarks.poll(ctx)
+    assert route.call_count - before == 1
+    assert rep.enqueued == 1 and "999" in ids_in_queue(queue)
+    assert queue.get_state("x.last_bookmark_id") == "999"

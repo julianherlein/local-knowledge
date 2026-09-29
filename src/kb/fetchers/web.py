@@ -6,13 +6,16 @@ read yet, and pages that yield less than `settings.web.min_chars` of text (paywa
 JS-only pages). Everything else (403 bot walls, 429, 5xx, timeouts, connection errors)
 is transient; `run.max_attempts` caps the cost of being wrong about that.
 
-trafilatura gets the raw bytes rather than `response.text`: it detects the encoding
-from the document itself, which is more reliable than a missing or wrong charset header.
+trafilatura gets the raw bytes so it can detect the encoding from the document, except
+when the charset is declared only in the HTTP header: then the header wins (see
+`html_input`). The body is streamed with a byte cap and a wall-clock deadline.
 """
 
 from __future__ import annotations
 
 import re
+import time
+from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -30,23 +33,129 @@ from ..textutil import one_line
 if TYPE_CHECKING:
     from lxml.html import HtmlElement
 
-PERMANENT_STATUS = {401, 404, 410}
+PERMANENT_STATUS = {401, 404, 410, 451}
 HTML_TYPES = ("text/html", "application/xhtml+xml")
 TEXT_TYPES = ("text/plain", "text/markdown", "text/x-markdown")
+MAX_TITLE_CHARS = 200
+MAX_BYTES = 10 * 1024 * 1024
+"""Bigger than any article; anything larger is a media file or a runaway response."""
 _LANG = re.compile(r"[a-z]{2}")
+_META_CHARSET = re.compile(rb"<meta[^>]+charset", re.IGNORECASE)
+_BINARY_MAGIC = (b"%PDF-", b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"PK\x03\x04", b"\x1f\x8b", b"RIFF", b"\x00\x00\x00")
+# Login, consent and subscription walls, recognised on the URL a redirect lands on.
+_WALL_WORD = re.compile(
+    r"^(?:consent|guce|login|log-in|logon|signin|sign-in|sign_in|subscribe|subscription|account|accounts"
+    # Whole segment (or `login.php`), never a slug prefix like `login-form-design`.
+    r"|myaccount|auth|oauth|sso|paywall|register|signup)(?:$|\.)",
+    re.IGNORECASE,
+)
+
+_LOCALE = re.compile(r"[a-z]{2}(?:[-_][a-z]{2})?", re.IGNORECASE)
+
+_clock = time.monotonic  # tests replace this to simulate a slow server without sleeping
+
+
+@dataclass(frozen=True)
+class Page:
+    url: str
+    """Final URL after redirects, as the server reported it."""
+    media_type: str
+    charset: str | None
+    content: bytes
 
 
 def _fail_status(status: int, url: str) -> FetchError:
     permanent = status in PERMANENT_STATUS
     reason = "http_5xx" if status >= 500 else f"http_{status}"
-    hint = " (login required)" if status == 401 else ""
+    hint = {401: " (login required)", 451: " (unavailable for legal reasons)"}.get(status, "")
     return FetchError(f"HTTP {status}{hint} for {url}", permanent=permanent, reason=reason)
 
 
-def get(http: httpx.Client, url: str, timeout: float) -> httpx.Response:
-    """GET `url`, translating every httpx failure into a FetchError."""
+def parse_content_type(value: str) -> tuple[str, str | None]:
+    """`text/html; charset=ISO-8859-1` -> ("text/html", "iso-8859-1")."""
+    parts = [p.strip() for p in value.split(";")]
+    charset = None
+    for param in parts[1:]:
+        key, _, val = param.partition("=")
+        if key.strip().lower() == "charset" and val.strip().strip("\"'"):
+            charset = val.strip().strip("\"'").lower()
+    return parts[0].lower(), charset
+
+
+def is_wall_redirect(requested: str, final: str) -> bool:
+    """A redirect that landed on a login / consent / subscribe page instead of the content."""
+    req, fin = urlsplit(requested), urlsplit(final)
+    if fin.path.rstrip("/") == req.path.rstrip("/"):
+        return False  # apex -> www, http -> https, trailing slash: same page
+    req_label = (req.hostname or "").removeprefix("www.").split(".", 1)[0]
+    fin_label = (fin.hostname or "").removeprefix("www.").split(".", 1)[0]
+    if fin_label != req_label and _WALL_WORD.match(fin_label):
+        return True  # consent.example.com, accounts.example.com, login.example.com
+    # Only where a wall lives: the first path segment (after an optional locale such as
+    # /en/ or /es-ar/), and only if the requested URL did not already have it there.
+    # Scanning every segment flagged real articles like /articles/login-walls.
+    segs = [seg for seg in fin.path.split("/") if seg]
+    if segs and _LOCALE.fullmatch(segs[0]):
+        segs = segs[1:]
+    req_segs = {seg.lower() for seg in req.path.split("/") if seg}
+    return bool(segs) and segs[0].lower() not in req_segs and bool(_WALL_WORD.match(segs[0]))
+
+
+def _wall_error(requested: str, final: str) -> FetchError:
+    return FetchError(
+        f"{requested} redirected to a login, consent or subscription wall ({final}); "
+        "clip the page manually (automatic clipping is Phase 2)",
+        permanent=True,
+        reason="login_wall",
+    )
+
+
+def _unsupported(what: str, url: str) -> FetchError:
+    return FetchError(
+        f"unsupported content type {what} at {url} (only HTML pages for now; PDF support is Phase 2)",
+        permanent=True,
+        reason="unsupported_content_type",
+    )
+
+
+def _too_large(url: str, limit: int) -> FetchError:
+    return FetchError(
+        f"response from {url} exceeds {limit // (1024 * 1024)} MB: not an article",
+        permanent=True,
+        reason="too_large",
+    )
+
+
+def download(http: httpx.Client, url: str, timeout: float, max_bytes: int = MAX_BYTES) -> Page:
+    """Stream `url` and return its body, translating every failure into a FetchError.
+
+    Rejections happen as early as the information allows: status, wall redirects and
+    content type from the headers, before any body byte is read; the size cap on
+    Content-Length or while streaming; and a wall-clock deadline of `timeout` seconds
+    from the request start, which per-read timeouts alone cannot give (a server that
+    drips one byte every few seconds never trips them).
+    """
+    started = _clock()
     try:
-        resp = http.get(url, timeout=timeout)
+        with http.stream("GET", url, timeout=timeout) as resp:
+            if resp.status_code >= 400:
+                raise _fail_status(resp.status_code, url)
+            final = str(resp.url)
+            if is_wall_redirect(url, final):
+                raise _wall_error(url, final)
+            mtype, charset = parse_content_type(resp.headers.get("content-type", ""))
+            if mtype and mtype not in HTML_TYPES and mtype not in TEXT_TYPES:
+                raise _unsupported("PDF" if mtype == "application/pdf" else mtype, final)
+            declared = resp.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > max_bytes:
+                raise _too_large(final, max_bytes)
+            buf = bytearray()
+            for chunk in resp.iter_bytes():
+                buf += chunk
+                if len(buf) > max_bytes:
+                    raise _too_large(final, max_bytes)
+                if _clock() - started > timeout:
+                    raise FetchError(f"download of {url} took longer than {timeout:g}s", reason="timeout")
     except httpx.TimeoutException as e:
         raise FetchError(f"timed out after {timeout:g}s: {url}", reason="timeout") from e
     except httpx.TooManyRedirects as e:
@@ -55,16 +164,36 @@ def get(http: httpx.Client, url: str, timeout: float) -> httpx.Response:
         raise FetchError(f"invalid URL {url}: {e}", permanent=True, reason="invalid_url") from e
     except httpx.HTTPError as e:
         raise FetchError(f"{type(e).__name__}: {e}", reason="network_error") from e
-    if resp.status_code >= 400:
-        raise _fail_status(resp.status_code, url)
-    return resp
+    content = bytes(buf)
+    if not mtype:
+        head = content.lstrip()[:8]
+        if head.startswith(b"%PDF-"):
+            raise _unsupported("PDF", final)
+        if head.startswith(_BINARY_MAGIC) or b"\x00" in content[:1024]:
+            raise _unsupported("binary data", final)
+    return Page(final, mtype, charset, content)
 
 
-def media_type(resp: httpx.Response) -> str:
-    ctype = resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if not ctype and resp.content.lstrip()[:5] == b"%PDF-":
-        return "application/pdf"
-    return ctype
+def decode_text(content: bytes, charset: str | None) -> str:
+    """Plain text: the declared charset, else UTF-8, else Windows-1252 (a superset of Latin-1)."""
+    for enc in (charset, "utf-8"):
+        if enc:
+            try:
+                return content.decode(enc)
+            except (UnicodeDecodeError, LookupError):
+                pass
+    return content.decode("cp1252", errors="replace")
+
+
+def html_input(content: bytes, charset: str | None) -> bytes | str:
+    """What to hand trafilatura. It detects encodings from the document, so bytes are
+    best, except when the charset is only in the HTTP header: then decode with it."""
+    if charset and not _META_CHARSET.search(content[:4096]):
+        try:
+            return content.decode(charset)
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return content
 
 
 def iso_language(value: str | None) -> str | None:
@@ -118,9 +247,9 @@ def fallback_title(tree: HtmlElement | None, url: str) -> str:
     return f"{host}{path}" if path else host
 
 
-def final_url(resp: httpx.Response, item: Item) -> str:
+def final_url(fetched_url: str, item: Item) -> str:
     try:
-        return normalize(str(resp.url)).canonical_url
+        return normalize(fetched_url).canonical_url
     except InvalidURL:
         return item.canonical_url
 
@@ -139,7 +268,7 @@ LAYOUT_CELL_CHARS = 400
 _TABLE_TAGS = {"table", "thead", "tbody", "tfoot", "tr", "td", "th"}
 
 
-def _trafilatura(html: bytes | HtmlElement, url: str) -> str:
+def _trafilatura(html: bytes | str | HtmlElement, url: str) -> str:
     out = trafilatura.extract(
         html,
         url=url,
@@ -170,7 +299,7 @@ def unwrap_layout_tables(tree: HtmlElement) -> HtmlElement:
     return tree
 
 
-def _extract_html(raw: bytes, url: str) -> tuple[str, dict[str, Any], HtmlElement | None]:
+def _extract_html(raw: bytes | str, url: str) -> tuple[str, dict[str, Any], HtmlElement | None]:
     body = _trafilatura(raw, url)
     tree = load_html(raw) if raw.strip() else None
     if tree is not None and is_layout_table(body):
@@ -277,13 +406,12 @@ def _clean(value: Any) -> str | None:
 
 def fetch(item: Item, ctx) -> FetchedItem:
     settings = ctx.settings
-    resp = get(ctx.http, item.canonical_url, settings.web.timeout_s)
-    url = final_url(resp, item)
-    ctype = media_type(resp)
+    page = download(ctx.http, item.canonical_url, settings.web.timeout_s)
+    url = final_url(page.url, item)
     min_chars = settings.web.min_chars
 
-    if ctype in TEXT_TYPES:
-        body = resp.text.strip()
+    if page.media_type in TEXT_TYPES:
+        body = decode_text(page.content, page.charset).strip()
         if len(body) < min_chars:
             raise _too_short(url, len(body), min_chars)
         first = next((ln for ln in body.splitlines() if ln.strip()), "")
@@ -292,19 +420,11 @@ def fetch(item: Item, ctx) -> FetchedItem:
             url=url,
             title=one_line(first.lstrip("#"), 120) or fallback_title(None, url),
             body=body + "\n",
-            extra={"hostname": urlsplit(url).hostname or None, "content_type": ctype},
+            extra={"hostname": urlsplit(url).hostname or None, "content_type": page.media_type},
         )
 
-    if ctype and ctype not in HTML_TYPES:
-        what = "PDF" if ctype == "application/pdf" else ctype
-        raise FetchError(
-            f"unsupported content type {what} at {url} (only HTML pages for now; PDF support is Phase 2)",
-            permanent=True,
-            reason="unsupported_content_type",
-        )
-
-    raw_body, meta, tree = _extract_html(resp.content, url)
-    title = _clean(meta.get("title")) or fallback_title(tree, url)
+    raw_body, meta, tree = _extract_html(html_input(page.content, page.charset), url)
+    title = one_line(_clean(meta.get("title")) or fallback_title(tree, url), MAX_TITLE_CHARS)
     body = tidy_markdown(raw_body, title)
     if len(body) < min_chars:
         raise _too_short(url, len(body), min_chars)

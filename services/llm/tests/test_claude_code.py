@@ -98,6 +98,6 @@ def test_fake_client_records_calls():
 @pytest.mark.live
 @pytest.mark.skipif(not os.environ.get("KB_LIVE_LLM") or not shutil.which("claude"), reason="set KB_LIVE_LLM=1")
 def test_live_structured_call():
-    client = ClaudeCodeClient(os.environ.get("KB_LIVE_MODEL", "haiku"))
+    client = ClaudeCodeClient(os.environ.get("KB_LIVE_MODEL", "claude-haiku-4-5-20251001"))
     r = client.complete(LLMRequest(system="Answer with the number only.", prompt="What is 2+3?", json_schema=SCHEMA))
     assert r.data == {"x": 5}

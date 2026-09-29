@@ -223,7 +223,10 @@ def test_hubs_and_index_embed_views_that_exist(built):
     index = (root / "wiki/index.md").read_text(encoding="utf-8")
     for d in fresh.domain_names:
         assert f"- [[wiki/domains/{d}]]: " in index
-    assert "**Stats:** 0 sources (0 uncompiled) | 0 concepts | 0 entities | 0 syntheses | last compile: never" in index
+    assert (
+        "**Stats:** 0 sources (0 unchecked in queue, incl. unsorted) | 0 concepts | 0 entities | 0 syntheses | last compile: never"
+        in index
+    )
 
 
 # Obsidian config -----------------------------------------------------------------------
@@ -242,7 +245,7 @@ def test_obsidian_config(built):
     app = json.loads((obs / "app.json").read_text(encoding="utf-8"))
     assert app["newLinkFormat"] == "absolute" and app["alwaysUpdateLinks"] is True
     graph = json.loads((obs / "graph.json").read_text(encoding="utf-8"))
-    assert graph["search"] == "-path:raw -path:digests -path:wiki/domains"
+    assert graph["search"] == "-path:raw -path:digests -path:wiki/domains -file:_compile-queue"
     colors = {g["query"]: g["color"]["rgb"] for g in graph["colorGroups"]}
     assert colors == {
         "tag:#data-engineering": 3900150,
@@ -295,7 +298,7 @@ def test_vault_claude_md_states_the_key_rules(built):
         "`kb tag <item_id> <domain>`",
         "status: compiled",
         "- [x]",
-        "about 150 entries",
+        "Past about 150, propose a split",
         "`mine`",
         "type: concept",
         "type: entity",
@@ -307,6 +310,46 @@ def test_vault_claude_md_states_the_key_rules(built):
         assert phrase in text, phrase
     # The template is not named CLAUDE.md inside the engine repo, so engine sessions never load it.
     assert not (Path(kbinit.__file__).parent / "templates" / "CLAUDE.md").exists()
+
+
+def test_hub_headings_are_unique_and_not_prefixes_of_each_other(built):
+    # Compile sessions edit hubs with exact string replacement; duplicate or prefix-sharing
+    # headings make "### Syntheses" ambiguous (critic finding M1).
+    hub = (built.vault_path / "wiki/domains/tennis.md").read_text(encoding="utf-8")
+    headings = [ln for ln in hub.splitlines() if ln.startswith("#")]
+    assert len(headings) == len(set(headings))
+    for a in headings:
+        for b in headings:
+            assert a == b or not b.startswith(a + " ") and not b.startswith(a), (a, b)
+
+
+def test_vault_claude_md_fixes_from_critic_review(built):
+    text = (built.vault_path / "CLAUDE.md").read_text(encoding="utf-8")
+    required = [
+        # H1: domains are derived from sources, with an order rule and re-evaluation.
+        "`domains` is derived from the page's sources",
+        "by the number of such sources carrying the domain, descending",
+        "Re-evaluate `domains`",
+        "only through the rule in section 4.5",
+        # M2: preflight snapshot instead of blocking on expected user edits.
+        "kb-preflight.txt",
+        "grep -vxFf",
+        "Mention them once and carry on",
+        # M3: sub-hub placement.
+        "not listed in one of this hub's sub-hubs",
+        "**Where a page's catalog line goes.**",
+        # L1: queue grep anchored to the tag run.
+        r"grep -nE '^- \[ \] \[\[[^]]+\]\]( #[a-z0-9-]+)* #<domain>( |$)'",
+        # L2/L3/L6.
+        "unchecked in queue, incl. unsorted",
+        "`last compile` is the date",
+        "prefix of the source's file name (its capture date)",
+        "at most 15 words on why it matters in this domain",
+        "`rm -- <path>`",
+    ]
+    for phrase in required:
+        assert phrase in text, phrase
+    assert "(7 uncompiled)" not in text
 
 
 def test_log_template_line_matches_documented_format(built):
